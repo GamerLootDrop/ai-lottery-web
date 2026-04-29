@@ -1,84 +1,65 @@
 import requests
 import pandas as pd
 import time
+import io
 
 class LotteryCrawler:
     def __init__(self):
         self.session = requests.Session()
-        # 模拟更真实的浏览器，防止被屏蔽
+        # 使用更像真实人类的浏览器头
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.google.com/'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
         }
 
-    def fetch_ssq(self):
-        # 换用网易彩票或类似的轻量源，对海外IP更友好
-        url = "http://kaijiang.zhcw.com/zhcw/html/ssq/list_1.html"
-        try:
-            print("尝试抓取双色球...")
-            # 增加超时到 60 秒，跨海网络延迟大
-            response = self.session.get(url, timeout=60, headers=self.headers)
-            # 强制用 Pandas 尝试解析所有表格
-            tables = pd.read_html(response.text)
-            for df in tables:
-                if '开奖日期' in df.columns or '期号' in df.columns:
-                    # 网易/中彩网结构的清洗
-                    df = df.dropna(subset=[df.columns[1]]) # 去掉空行
-                    results = []
-                    for _, row in df.iterrows():
-                        issue = str(row.iloc[1]).strip()
-                        if issue.isdigit() and len(issue) >= 5:
-                            # 提取红球（通常在第3列）
-                            balls = str(row.iloc[2]).split()
-                            if len(balls) >= 7:
-                                results.append({
-                                    '期号': issue, 
-                                    '红球': ' '.join(balls[:6]), 
-                                    '蓝球': balls[6]
-                                })
-                    if results:
-                        return results[:100]
-        except Exception as e:
-            print(f"SSQ 抓取失败: {e}")
-        return []
-
-    def fetch_dlt(self):
-        # 大乐透使用 500.com 的新版 API 路径，通常比历史页面更稳定
-        url = "http://datachart.500.com/dlt/history/new_history.shtml"
-        try:
-            print("尝试抓取大乐透...")
-            response = self.session.get(url, timeout=60, headers=self.headers)
-            response.encoding = 'utf-8'
-            tables = pd.read_html(response.text)
-            for df in tables:
-                # 寻找包含数据的表格
-                if df.shape[1] > 10:
-                    results = []
-                    # 500.com 的表格通常第一行是标题，需要跳过
-                    for i in range(len(df)):
-                        row = df.iloc[i]
-                        issue = str(row[1]).strip()
-                        if issue.isdigit() and len(issue) >= 5:
-                            red = ' '.join([str(row[j]) for j in range(2, 7)])
-                            blue = ' '.join([str(row[j]) for j in range(7, 9)])
-                            results.append({'期号': issue, '红球': red, '蓝球': blue})
-                    if results:
-                        return results[:100]
-        except Exception as e:
-            print(f"DLT 抓取失败: {e}")
+    def fetch_data(self, url, name):
+        for i in range(3):  # 自动重试3次
+            try:
+                print(f"正在尝试抓取 {name} (第 {i+1} 次)...")
+                # 增加超时到 60 秒，应对跨海网络延迟
+                response = self.session.get(url, timeout=60, headers=self.headers)
+                response.encoding = 'gb2312'
+                
+                # 暴力解析：直接把网页里的所有表格抠出来
+                tables = pd.read_html(io.StringIO(response.text))
+                for df in tables:
+                    # 检查是否是目标开奖表格（通常列数较多）
+                    if df.shape[1] >= 7:
+                        results = []
+                        # 遍历表格行
+                        for _, row in df.iterrows():
+                            # 提取期号（通常在第1或第2列）
+                            issue = str(row.values[1]).strip()
+                            if issue.isdigit() and len(issue) >= 5:
+                                vals = [str(v).strip() for v in row.values]
+                                if name == "大乐透":
+                                    # 大乐透 5红 + 2蓝
+                                    red = ' '.join(vals[2:7])
+                                    blue = ' '.join(vals[7:9])
+                                else:
+                                    # 双色球 6红 + 1蓝
+                                    red = ' '.join(vals[2:8])
+                                    blue = vals[8]
+                                results.append({'期号': issue, '红球': red, '蓝球': blue})
+                        
+                        if results:
+                            print(f"🎉 {name} 抓取成功: {len(results)} 期")
+                            return results[:100]
+                time.sleep(5)
+            except Exception as e:
+                print(f"抓取出错: {e}")
         return []
 
     def run(self):
-        # 强制重写文件，确保只要抓到一点就同步
-        for name, func, filename in [("大乐透", self.fetch_dlt, 'dlt_data.csv'), ("双色球", self.fetch_ssq, 'ssq_data.csv')]:
-            data = func()
-            if data:
-                pd.DataFrame(data).to_csv(filename, index=False, encoding='utf-8')
-                print(f"🎉 {name} 成功同步 {len(data)} 期")
-            else:
-                # 如果没抓到，至少写个表头保命，别让网页崩了
-                pd.DataFrame(columns=['期号', '红球', '蓝球']).to_csv(filename, index=False, encoding='utf-8')
-                print(f"❌ {name} 抓取完全失败，已写空表头")
+        # 两个源分别抓取
+        dlt = self.fetch_data("http://datachart.500.com/dlt/history/new_history.shtml", "大乐透")
+        if dlt:
+            pd.DataFrame(dlt).to_csv('dlt_data.csv', index=False, encoding='utf-8')
+        
+        ssq = self.fetch_data("http://datachart.500.com/ssq/history/history.shtml", "双色球")
+        if ssq:
+            pd.DataFrame(ssq).to_csv('ssq_data.csv', index=False, encoding='utf-8')
 
 if __name__ == "__main__":
     LotteryCrawler().run()
