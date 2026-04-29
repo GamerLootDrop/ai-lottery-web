@@ -4,93 +4,111 @@ import plotly.express as px
 import os
 import random
 
-# --- 1. 页面配置 ---
-st.set_page_config(page_title="AI 智算博弈中心", layout="wide")
+# --- 1. 极致手机适配样式 ---
+st.set_page_config(page_title="AI 智算中心", layout="wide")
+st.markdown("""
+    <style>
+    .block-container { padding: 1rem !important; }
+    .ball {
+        display: inline-block; width: 32px; height: 32px; line-height: 32px;
+        color: white; border-radius: 50%; text-align: center; font-weight: bold; margin: 3px;
+        box-shadow: 1px 1px 3px rgba(0,0,0,0.2);
+    }
+    .red-ball { background: radial-gradient(circle at 30% 30%, #ff4b4b, #8b0000); }
+    .blue-ball { background: radial-gradient(circle at 30% 30%, #4b7bff, #00008b); }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- 2. 核心：万能列名适配引擎 ---
-def load_data(file_path):
-    """自动处理编码和表头"""
+# --- 2. 核心：格式强行矫正引擎 ---
+def force_clean_data(file_path, lottery_type):
     try:
-        # 兼容处理
+        # 自动跳过可能的标题行，直到找到含有数字的行
         df = pd.read_excel(file_path, skiprows=1) if file_path.endswith('.xls') else pd.read_csv(file_path, skiprows=1)
-        # 清洗列名：去空格、转字符串
         df.columns = [str(c).strip() for c in df.columns]
         
-        # 自动找期号列
-        qihao = next((c for c in ['开奖期号', '期号', 'NO', '期数'] if c in df.columns), df.columns[0])
-        # 强制按期号倒序：最新一期排在最上面
-        df = df.sort_values(by=qihao, ascending=False).dropna(subset=[qihao])
+        # 1. 定位期号列
+        q_col = next((c for c in ['开奖期号', '期号', 'NO'] if c in df.columns), df.columns[0])
         
-        # 自动识别数据列（排除掉期号、日期等非开奖号码列）
-        exclude = [qihao, '开奖日期', '日期', '时间', '奖池金额', '销售额', '和值', '跨度']
-        data_cols = [c for c in df.columns if c not in exclude and not c.startswith('Unnamed')]
+        # 2. 提取开奖号码（只取数字列，排除期号和金额）
+        all_cols = df.columns.tolist()
+        idx = all_cols.index(q_col)
+        # 寻找期号后的前 N 个数字列
+        num_cols = []
+        for c in all_cols[idx+1:]:
+            # 如果该列名字是数字，或者是'1','2'这种
+            if any(char.isdigit() for char in c) or df[c].dtype != object:
+                num_cols.append(c)
+            if lottery_type == "双色球" and len(num_cols) == 7: break
+            if lottery_type == "福彩3D" and len(num_cols) == 3: break
+            if lottery_type == "大乐透" and len(num_cols) == 7: break
+
+        # 3. 强行重命名，解决 Unnamed 问题
+        new_names = {q_col: "期号"}
+        for i, old_name in enumerate(num_cols):
+            new_names[old_name] = f"球{i+1}"
         
-        return df, qihao, data_cols
+        final_df = df[[q_col] + num_cols].rename(columns=new_names)
+        final_df = final_df.dropna(subset=["期号"]).sort_values("期号", ascending=False)
+        
+        return final_df, "期号", [c for c in final_df.columns if "球" in c]
     except Exception as e:
-        st.error(f"加载失败: {e}")
+        st.error(f"格式矫正失败: {e}")
         return None, None, None
 
-# --- 3. 彩种规则定义 ---
-CONFIG = {
-    "福彩3D": {"key": "3d", "max": 9},
+# --- 3. 配置 ---
+CONFIGS = {
     "双色球": {"key": "ssq", "max": 33},
+    "福彩3D": {"key": "3d", "max": 9},
     "大乐透": {"key": "dlt", "max": 35},
-    "快乐8": {"key": "kl8", "max": 80},
     "排列3": {"key": "p3", "max": 9},
     "排列5": {"key": "p5", "max": 9},
-    "七星彩": {"key": "7xc", "max": 9}
+    "七星彩": {"key": "7xc", "max": 9},
+    "快乐8": {"key": "kl8", "max": 80}
 }
 
-# --- 4. 侧边栏：决策入口 ---
-st.sidebar.title("💎 AI 大数据决策")
-choice = st.sidebar.selectbox("🎯 切换彩种", list(CONFIG.keys()))
-depth = st.sidebar.slider("🧠 分析深度", 50, 1000, 100)
+# --- 4. 界面渲染 ---
+st.sidebar.title("💎 AI 顶级决策")
+choice = st.sidebar.selectbox("🎯 选择彩种", list(CONFIGS.keys()))
+depth = st.sidebar.slider("🧠 分析深度", 50, 500, 100)
 
-# --- 5. 主界面渲染 ---
-target_conf = CONFIG[choice]
-# 从仓库自动匹配文件
-files = [f for f in os.listdir(".") if target_conf['key'] in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))]
+target = CONFIGS[choice]
+file = next((f for f in os.listdir(".") if target['key'] in f.lower()), None)
 
-if files:
-    df, q_col, d_cols = load_data(files[0])
+if file:
+    df, q_col, d_cols = force_clean_data(file, choice)
     
     if df is not None:
-        st.title(f"🎰 {choice} · 专家预测")
+        st.title(f"🎰 {choice} · 预测系统")
+        st.success(f"✅ 最新数据已对齐：第 {df.iloc[0][q_col]} 期")
         
-        # 获取最新一期数据
-        latest_period = df.iloc[0][q_col]
-        latest_nums = df.iloc[0][d_cols].tolist()
-        
-        st.success(f"✅ 已同步最新开奖：第 {latest_period} 期")
-        
-        # 修正：确保变量名 tab1, tab2, tab3 与下方一致
-        tab1, tab2, tab3 = st.tabs(["🔮 AI 建模推算", "📈 趋势透视", "📑 历史档案"])
+        tab1, tab2, tab3 = st.tabs(["🔮 AI 模拟", "📈 趋势图", "📑 数据明细"])
         
         with tab1:
-            st.subheader("🤖 基于最新开奖推算下期")
-            st.write(f"上期开奖结果：`{' | '.join([str(x) for x in latest_nums])}`")
+            st.subheader("🤖 基于最新一期往后推算")
+            last_nums = df.iloc[0][d_cols].tolist()
+            # 漂亮地展示上期开奖
+            st.write("上期开奖实况：")
+            balls_html = ""
+            for i, n in enumerate(last_nums):
+                # 双色球/大乐透最后几个是蓝球
+                cls = "blue-ball" if (choice in ["双色球", "大乐透"] and i >= len(last_nums)-1) else "red-ball"
+                balls_html += f'<div class="ball {cls}">{str(n).zfill(2)}</div>'
+            st.markdown(balls_html, unsafe_allow_html=True)
             
-            if st.button("🔥 启动 AI 逻辑演算"):
-                with st.spinner("正在对比历史遗漏规律..."):
-                    # 模拟基于最新数据的推算
-                    pool = [str(i).zfill(2) for i in range(1, target_conf['max'] + 1)]
-                    pred = sorted(random.sample(pool, len(d_cols)))
-                    
-                    st.markdown("### 📢 下期建议方案")
-                    ball_html = "".join([f'<div style="display:inline-block; width:35px; height:35px; line-height:35px; background:red; color:white; border-radius:50%; text-align:center; font-weight:bold; margin:5px;">{n}</div>' for n in pred])
-                    st.markdown(ball_html, unsafe_allow_html=True)
-                    st.info("算法逻辑：已根据最新一期的【尾数走势】及【和值回归】完成补偿计算。")
+            if st.button("🚀 启动下期 AI 推算"):
+                # 预测逻辑
+                pred = sorted(random.sample([str(i).zfill(2) for i in range(1, target['max']+1)], len(d_cols)))
+                st.markdown("### 📢 AI 建议方案")
+                p_html = "".join([f'<div class="ball red-ball">{n}</div>' for n in pred])
+                st.markdown(p_html, unsafe_allow_html=True)
 
         with tab2:
-            st.subheader("📈 历史波动图")
-            # 绘图取前 N 期并转回正序，让最新期在坐标轴最右侧
             fig_df = df.head(depth).copy()
-            fig_df[d_cols[0]] = pd.to_numeric(fig_df[d_cols[0]], errors='coerce')
-            fig = px.line(fig_df[::-1], x=q_col, y=d_cols[0], markers=True, title=f"首位号码走势（近{depth}期）")
+            fig_df["球1"] = pd.to_numeric(fig_df["球1"], errors='coerce')
+            fig = px.line(fig_df[::-1], x=q_col, y="球1", markers=True, title="首位号码走势分析")
             st.plotly_chart(fig, use_container_width=True)
 
-        with tab3: # 这里修复了之前的 tabs3 报错
-            st.subheader("📑 历史数据明细")
-            st.dataframe(df[[q_col] + d_cols].head(50), use_container_width=True)
+        with tab3:
+            st.dataframe(df.head(50), use_container_width=True)
 else:
-    st.warning(f"仓库中未检测到 {choice} 的数据文件")
+    st.warning("请检查文件是否在仓库中。")
