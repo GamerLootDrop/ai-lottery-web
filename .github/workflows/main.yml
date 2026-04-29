@@ -1,9 +1,9 @@
 name: Lottery Data Auto Update
 
 on:
-  workflow_dispatch: # 支持手动触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 14 * * *' # 每天北京时间22:00
+    - cron: '0 14 * * *'
 
 jobs:
   update_data:
@@ -25,19 +25,15 @@ jobs:
 
       - name: Run crawler
         run: |
-          # 运行爬虫直接生成新的 CSV
+          # 哪怕 CSV 是空的，脚本也必须强行运行并生成新文件
           python lottery_crawler.py
 
-      - name: Commit and Force Push
+      - name: Force Push Changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
-          # 关键：先拉取远程，但如果冲突，以本地新抓取的为准
           git add dlt_data.csv ssq_data.csv
-          
-          # 强制提交：即使有冲突也以现在的 100 期为准
-          git commit -m "自动更新: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
-          
-          # 暴力推送：彻底解决 Exit code 1 的权限和历史冲突
+          # 即使没有变化也不要报错
+          git commit -m "数据重刷: $(date)" || echo "No changes to commit"
+          # 暴力推送，清除之前的冲突痕迹
           git push origin main --force
