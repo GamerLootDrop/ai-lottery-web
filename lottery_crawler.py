@@ -1,7 +1,7 @@
 import requests
 import re
 import pandas as pd
-import time
+import os
 
 class LotteryCrawler:
     def __init__(self):
@@ -51,7 +51,7 @@ class LotteryCrawler:
                     tds = re.findall(td_pattern, row)
                     if len(tds) >= 9:
                         issue = tds[1].strip()
-                        # 严格过滤垃圾数据
+                        # 严格过滤垃圾数据，确保 CSV 只有干净的数字
                         if issue.isdigit() and len(issue) >= 5:
                             red_balls = [tds[i].strip() for i in range(2, 7)]
                             blue_balls = [tds[i].strip() for i in range(7, 9)]
@@ -63,14 +63,16 @@ class LotteryCrawler:
         return all_data
 
     def run(self):
-        # 抓取并直接保存，不读取旧文件，防止空文件报错
+        # 核心改进：直接 to_csv 覆盖，不读取旧文件，彻底避开空文件报错
         dlt_results = self.fetch_dlt()
         if dlt_results:
             pd.DataFrame(dlt_results).to_csv('dlt_data.csv', index=False, encoding='utf-8')
+            print("DLT 数据已强制重写 [dlt_data.csv]")
         
         ssq_results = self.fetch_ssq()
         if ssq_results:
             pd.DataFrame(ssq_results).to_csv('ssq_data.csv', index=False, encoding='utf-8')
+            print("SSQ 数据已强制重写 [ssq_data.csv]")
 
 if __name__ == "__main__":
     crawler = LotteryCrawler()
