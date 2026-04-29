@@ -1,34 +1,36 @@
 name: Lottery Data Auto Update
 
 on:
+  workflow_dispatch: # 支持手动触发
   schedule:
-    # 每天北京时间晚上 22:30 自动运行（大乐透通常 21:30 开奖）
-    - cron: '30 14 * * *' 
-  workflow_dispatch: # 允许你手动点击按钮立刻更新
+    - cron: '0 14 * * *' # 每天北京时间晚上22:00自动运行
 
 jobs:
   update_data:
     runs-on: ubuntu-latest
+    permissions: # 显式声明权限，确保万无一失
+      contents: write
+    
     steps:
-      - name: 检出代码
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: 设置 Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      - name: 安装抓取插件
+      - name: Install dependencies
         run: |
-          pip install requests pandas beautifulsoup4
+          pip install requests pandas
 
-      - name: 执行爬虫抓取最新号码
+      - name: Run crawler
         run: python lottery_crawler.py
 
-      - name: 自动保存数据并推送到仓库
+      - name: Commit and Push changes
         run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
           git add dlt_data.csv ssq_data.csv
-          git commit -m "自动更新开奖数据: $(date)" || exit 0
+          git commit -m "自动更新开奖数据: $(date)" || echo "No changes to commit"
           git push
