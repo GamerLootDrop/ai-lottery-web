@@ -1,9 +1,9 @@
 name: Lottery Data Auto Update
 
 on:
-  workflow_dispatch: # 支持手动触发
+  workflow_dispatch: # 手动触发
   schedule:
-    - cron: '0 14 * * *' # 每天北京时间22:00自动运行
+    - cron: '0 14 * * *' # 每天北京时间22:00
 
 jobs:
   update_data:
@@ -15,7 +15,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # 获取完整历史，防止提交冲突
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -28,21 +28,25 @@ jobs:
       - name: Run crawler
         run: python lottery_crawler.py
 
-      - name: Commit and Push changes
+      - name: Force Push Changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # 第一步：先把网页上的改动拉下来，解决冲突
-          git pull origin main --rebase
+          # 强制同步远程状态，抹平之前的冲突
+          git fetch origin main
+          git reset --hard origin main
           
-          # 第二步：添加更新后的数据
+          # 重新运行爬虫确保拿到最新数（reset会抹掉刚才运行的结果）
+          python lottery_crawler.py
+          
           git add dlt_data.csv ssq_data.csv
           
-          # 第三步：强制推送到仓库
+          # 检查是否有变动
           if git diff --staged --quiet; then
-            echo "No changes to commit"
+            echo "No changes"
           else
-            git commit -m "自动更新开奖数据: $(date)"
-            git push origin main
+            git commit -m "暴力同步开奖数据: $(date)"
+            # 使用 --force 强制推送，解决一切 Exit code 1
+            git push origin main --force
           fi
