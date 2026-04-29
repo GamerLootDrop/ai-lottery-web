@@ -3,12 +3,11 @@ name: Lottery Data Auto Update
 on:
   workflow_dispatch: # 支持手动触发
   schedule:
-    - cron: '0 14 * * *' # 每天北京时间晚上22:00自动运行
+    - cron: '0 14 * * *' # 每天北京时间22:00自动运行
 
 jobs:
   update_data:
     runs-on: ubuntu-latest
-    # 给机器人最高的写权限
     permissions:
       contents: write
     
@@ -16,8 +15,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          # 获取所有历史记录，防止 push 时发生冲突
-          fetch-depth: 0
+          fetch-depth: 0 # 获取完整历史，防止提交冲突
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -25,31 +23,26 @@ jobs:
           python-version: '3.9'
 
       - name: Install dependencies
-        run: |
-          pip install requests pandas
+        run: pip install requests pandas
 
       - name: Run crawler
-        run: |
-          # 运行爬虫
-          python lottery_crawler.py
-          # 检查文件是否生成
-          ls -lh *.csv
+        run: python lottery_crawler.py
 
       - name: Commit and Push changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # 先拉取远程改动，防止冲突
+          # 第一步：先把网页上的改动拉下来，解决冲突
           git pull origin main --rebase
           
+          # 第二步：添加更新后的数据
           git add dlt_data.csv ssq_data.csv
           
-          # 只有在有变动时才提交，防止空提交报错
+          # 第三步：强制推送到仓库
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git commit -m "自动更新开奖数据: $(date)"
-            # 强力推送
             git push origin main
           fi
