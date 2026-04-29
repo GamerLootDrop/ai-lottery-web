@@ -1,55 +1,49 @@
 import requests
 import pandas as pd
+import os
 
 class LotteryCrawler:
     def __init__(self):
-        # 使用更稳健的 API 接口
-        self.apis = {
-            "大乐透": "https://m.tool.cn/api/lottery/history?type=dlt",
-            "双色球": "https://m.tool.cn/api/lottery/history?type=ssq"
-        }
-        # 🛡️ 兜底真数据：如果 API 失败，至少保证网页有内容显示
-        self.backup_data = {
-            "大乐透": [
-                {"期号": "2026048", "红球": "02 07 15 22 30", "蓝球": "05 11"},
-                {"期号": "2026047", "红球": "01 09 12 21 28", "蓝球": "01 08"},
-                {"期号": "2026046", "红球": "05 11 18 25 33", "蓝球": "02 09"}
-            ],
-            "双色球": [
-                {"期号": "2026048", "红球": "03 08 15 21 26 31", "蓝球": "05"},
-                {"期号": "2026047", "红球": "01 07 12 19 24 30", "蓝球": "12"}
-            ]
-        }
+        self.api_url = "https://m.tool.cn/api/lottery/history?type=dlt"
+        self.headers = {'User-Agent': 'Mozilla/5.0'}
 
-    def fetch_data(self, name):
+    def update_database(self, filename, name):
+        # 1. 加载现有数据库
+        if os.path.exists(filename):
+            try:
+                df_old = pd.read_csv(filename, dtype={'期号': str})
+            except:
+                df_old = pd.DataFrame(columns=['期号', '红球', '蓝球'])
+        else:
+            df_old = pd.DataFrame(columns=['期号', '红球', '蓝球'])
+
+        # 2. 抓取最新数据
+        new_results = []
         try:
-            print(f"📡 尝试获取 {name} API 数据...")
-            res = requests.get(self.apis[name], timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
-            if res.status_code == 200 and 'data' in res.json():
-                items = res.json()['data']
-                results = []
-                for it in items[:50]: # 取最近50期
-                    code = it.get('opencode', '').replace('+', ',').split(',')
-                    if name == "大乐透":
-                        r = " ".join([x.zfill(2) for x in code[:5]])
-                        b = " ".join([x.zfill(2) for x in code[5:]])
-                    else:
-                        r = " ".join([x.zfill(2) for x in code[:6]])
-                        b = code[6].zfill(2)
-                    results.append({"期号": it.get('expect'), "红球": r, "蓝球": b})
-                if results:
-                    print(f"✅ {name} API 获取成功！")
-                    return results
+            res = requests.get(self.api_url, headers=self.headers, timeout=20)
+            items = res.json().get('data', [])
+            for it in items:
+                code = it.get('opencode', '').replace('+', ',').split(',')
+                issue = str(it.get('expect'))
+                if name == "大乐透":
+                    r, b = " ".join([x.zfill(2) for x in code[:5]]), " ".join([x.zfill(2) for x in code[5:]])
+                else:
+                    r, b = " ".join([x.zfill(2) for x in code[:6]]), code[6].zfill(2)
+                new_results.append({"期号": issue, "红球": r, "蓝球": b})
         except Exception as e:
-            print(f"⚠️ {name} API 失败，启动内置数据兜底。")
-        return self.backup_data[name]
+            print(f"📡 抓取失败: {e}")
+
+        # 3. 合并并去重（核心步骤）
+        df_new = pd.DataFrame(new_results)
+        # 将新老数据合并，并根据“期号”去重，保留最新的
+        df_total = pd.concat([df_new, df_old]).drop_duplicates(subset=['期号'], keep='first')
+        # 按期号从大到小排序
+        df_total = df_total.sort_values(by='期号', ascending=False)
+
+        # 4. 保存回去
+        df_total.to_csv(filename, index=False, encoding='utf-8-sig')
+        print(f"✅ {name} 数据库已更新。当前总记录数：{len(df_total)}")
 
     def run(self):
-        for name, file in [("大乐透", "dlt_data.csv"), ("双色球", "ssq_data.csv")]:
-            final_data = self.fetch_data(name)
-            # 这里的 index=False 很关键，确保不生成第一列多余的数字
-            pd.DataFrame(final_data).to_csv(file, index=False, encoding='utf-8-sig')
-            print(f"💾 {file} 已保存。")
-
-if __name__ == "__main__":
-    LotteryCrawler().run()
+        self.update_database('dlt_data.csv', "大乐透")
+        # 如果需要双色球，可以添加对应的 API 逻辑
