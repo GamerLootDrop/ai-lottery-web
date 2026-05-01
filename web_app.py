@@ -5,7 +5,7 @@ import time
 import random
 
 # --- 1. 深度定制样式表 ---
-st.set_page_config(page_title="AI 智算博弈中心", layout="wide")
+st.set_page_config(page_title="AI 大数据决策终端", layout="wide")
 st.markdown("""
     <style>
     .block-container { padding: 1.5rem !important; max-width: 900px; }
@@ -26,17 +26,22 @@ st.markdown("""
     .pred-title { width: 140px; font-weight: bold; color: #444; font-size: 15px; line-height: 1.2; }
     .pred-balls { flex-grow: 1; }
     
-    /* 复制按钮样式优化 */
-    .stButton button { width: 100%; border-radius: 8px; }
+    .stButton button { width: 100%; border-radius: 8px; font-weight: bold;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 增强型数据提取引擎 ---
+# --- 2. 终极防弹数据提取引擎 ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
+        # 智能检测多层表头
         df = pd.read_excel(file_path) if file_path.endswith('.xls') else pd.read_csv(file_path)
+        if "Unnamed" in str(df.columns[0]) or "Unnamed" in str(df.columns[1]):
+            df = pd.read_excel(file_path, skiprows=1) if file_path.endswith('.xls') else pd.read_csv(file_path, skiprows=1)
+            
         df.columns = [str(c).strip() for c in df.columns]
+        
+        # 寻找期号列并强制转为数字，剔除文字干扰行
         q_col = next((c for c in df.columns if '期' in c or 'NO' in c), df.columns[0])
         df[q_col] = pd.to_numeric(df[q_col], errors='coerce')
         df = df.dropna(subset=[q_col])
@@ -47,19 +52,28 @@ def load_full_data(file_path, choice):
         }
         n_balls, needs_zero = lottery_params.get(choice, (7, True))
         
+        # 智能跳过非球号列
         q_idx = df.columns.get_loc(q_col)
         raw_ball_cols = []
         for c in df.columns[q_idx+1:]:
-            if any(x in str(c) for x in ['日', '周', '时', '售', '额']): continue
+            if any(x in str(c) for x in ['日', '周', '时', '售', '额', '奖']): continue
             raw_ball_cols.append(c)
             if len(raw_ball_cols) == n_balls: break
         
+        # 重命名并安全提取
         new_cols = [q_col] + [f"ball_{i+1}" for i in range(len(raw_ball_cols))]
         clean_df = df[[q_col] + raw_ball_cols].copy()
         clean_df.columns = new_cols
-        for col in new_cols: clean_df[col] = clean_df[col].astype(int)
+        
+        # 【核心修复】：安全转换，遇到空值或乱码填为 0，防止 astype(int) 崩溃
+        for col in new_cols: 
+            clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce').fillna(0).astype(int)
+            
         return clean_df.sort_values(q_col, ascending=False), q_col, new_cols[1:], needs_zero
-    except: return None, None, None, None
+    except Exception as e:
+        # 万一失败，直接在网页打印底层错误代码！
+        st.error(f"🚨 解析引擎报错详情: {str(e)}")
+        return None, None, None, None
 
 # --- 3. 辅助功能：生成推荐号码 ---
 def get_prediction_sets(choice):
@@ -88,7 +102,6 @@ choice = st.sidebar.selectbox("🎯 选择实战彩种", list(LOTTERY_FILES.keys
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 显示选项")
-# 老板要的“排列好”的期数选项
 preset_map = {"近20期": 20, "近50期": 50, "近100期": 100, "近200期": 200, "显示全部": 999999}
 selected_preset = st.sidebar.radio("选择查看范围", list(preset_map.keys()), index=1)
 show_limit = preset_map[selected_preset]
@@ -106,7 +119,6 @@ if target_file:
         
         with tab1:
             st.markdown(f"**当前排列：{selected_preset}** (数据库共计 {total_records} 期)")
-            # 渲染表格
             html = "<table class='hist-table'><tr><th>期号</th><th>开奖号码</th></tr>"
             for _, row in df.head(show_limit).iterrows():
                 balls_html = ""
@@ -131,12 +143,11 @@ if target_file:
         with tab3:
             st.subheader("🧠 五维联合预测")
             if st.button("🚀 启动 AI 深度演算 (基于20年大数据)", use_container_width=True):
-                with st.spinner("正在穿越 20 年历史长河检索规律..."):
-                    time.sleep(1.5)
+                with st.spinner("正在穿越历史长河检索底层规律..."):
+                    time.sleep(1.2)
                     pred_sets = get_prediction_sets(choice)
                     
-                    # 准备复制用的纯文本
-                    copy_text = f"【{choice} AI 智算推荐】\n"
+                    copy_text = f"【{choice} AI智算推荐】\n"
                     for p in pred_sets:
                         st.markdown(f"""
                         <div class='pred-row'>
@@ -147,11 +158,10 @@ if target_file:
                         copy_text += f"{p['strategy']}: {p['text']}\n"
                     
                     st.markdown("---")
-                    # 老板要的一键复制功能
                     if st.button("📋 一键复制所有推荐号码"):
-                        st.write("已尝试复制到剪贴板，请尝试手动选中下方文本：")
-                        st.code(copy_text) # 这种方式在所有浏览器和Streamlit版本中最稳妥
+                        st.code(copy_text)
                         st.toast("号码已整理，请直接复制上方灰色区域内容！", icon='✅')
-
-    else: st.error("数据载入失败")
-else: st.error(f"未找到 {choice} 数据")
+    else: 
+        st.error("数据载入失败，请查看上方具体的错误详情。")
+else: 
+    st.error(f"🚨 未找到 {choice} 数据文件，请确保后台存在类似 {file_keyword}.xls 或 .csv 的文件。")
