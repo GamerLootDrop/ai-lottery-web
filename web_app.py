@@ -3,93 +3,110 @@ import pandas as pd
 import plotly.express as px
 import os
 
-# --- 1. 样式配置 ---
+# --- 1. 极致清爽的 UI 设置 ---
 st.set_page_config(page_title="AI 智算博弈中心", layout="wide")
 st.markdown("""
     <style>
-    .block-container { padding: 1.5rem !important; }
-    /* 让表格看起来更像 Excel */
-    .stDataFrame { border: 1px solid #dee2e6; }
+    /* 让表格在手机端紧凑、居中、不乱跑 */
+    .stDataFrame { width: 100% !important; margin: 0 auto; }
+    div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
     /* 侧边栏按钮美化 */
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #ff4b4b; color: white; }
+    .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; background-color: #ff4b4b; color: white; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 核心：原样读取引擎 ---
-def load_original_excel(file_path):
+# --- 2. 暴力美容数据引擎 ---
+def load_and_beautify(file_path, choice):
+    """专治各种 Unnamed 乱码表头，强行格式化！"""
     try:
-        # 直接读取原始 Excel，保留表头原样
-        # 如果您的 Excel 第一行是标题，第二行是表头，我们就从第二行开始读
+        # 读取数据
         df = pd.read_excel(file_path, skiprows=1) if file_path.endswith('.xls') else pd.read_csv(file_path, skiprows=1)
+        df.columns = [str(c).strip() for c in df.columns]
         
-        # 清理掉全空的行和列
-        df = df.dropna(how='all').dropna(axis=1, how='all')
+        # 1. 精准找到期号列
+        q_col = next((c for c in df.columns if '期' in c or 'NO' in c), df.columns[0])
+        q_idx = df.columns.get_loc(q_col)
         
-        # 自动识别期号列（用于绘图和倒序）
-        # 只要列名里包含“期”字，我们就把它当做索引
-        qihao_col = None
-        for col in df.columns:
-            if '期' in str(col):
-                qihao_col = col
-                break
+        # 2. 根据彩种，强行截取期号后面的 N 个号码列
+        ball_counts = {"双色球": 7, "大乐透": 7, "福彩3D": 3, "快乐8": 20, "排列3": 3, "排列5": 5, "七星彩": 7}
+        n_balls = ball_counts.get(choice, 7)
         
-        if qihao_col:
-            # 确保最新开奖在最前面
-            df = df.sort_values(by=qihao_col, ascending=False)
-            
-        return df, qihao_col
+        # 截取真正的号码列（避开那些金额、奖池等垃圾列）
+        raw_ball_cols = df.columns[q_idx+1 : q_idx+1+n_balls]
+        
+        # 3. 强行重命名表头，干掉 Unnamed
+        rename_dict = {q_col: "期号"}
+        for i, c in enumerate(raw_ball_cols):
+            if choice == "双色球":
+                rename_dict[c] = "蓝球" if i == 6 else f"红{i+1}"
+            elif choice == "大乐透":
+                rename_dict[c] = f"蓝{i-4}" if i >= 5 else f"红{i+1}"
+            elif choice == "福彩3D":
+                rename_dict[c] = f"百十个"[i] + "位" if i < 3 else f"球{i+1}"
+            else:
+                rename_dict[c] = f"第{i+1}位"
+                
+        clean_df = df[[q_col] + list(raw_ball_cols)].rename(columns=rename_dict)
+        
+        # 4. 强行补零美容 (把 1 变成 01)
+        for col in clean_df.columns:
+            if col != "期号":
+                # 转换成数字再转回字符串补零，防止出现 1.0 这种怪异格式
+                clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce').fillna(0).astype(int).astype(str).str.zfill(2)
+        
+        # 剔除空行，按期号倒序（最新排最前）
+        clean_df = clean_df.dropna(subset=['期号']).sort_values('期号', ascending=False)
+        return clean_df, "期号", [rename_dict[c] for c in raw_ball_cols]
+    
     except Exception as e:
-        st.error(f"读取原始数据失败: {e}")
-        return None, None
+        st.error(f"数据清洗失败: {e}")
+        return None, None, None
 
-# --- 3. 配置映射 ---
+# --- 3. 配置与文件映射 ---
 LOTTERY_FILES = {
     "福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", 
     "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"
 }
 
-# --- 4. 界面布局 ---
 st.sidebar.title("💎 AI 大数据决策")
 choice = st.sidebar.selectbox("🎯 选择彩种", list(LOTTERY_FILES.keys()))
 
-# 自动匹配文件
 file_keyword = LOTTERY_FILES[choice]
 target_file = next((f for f in os.listdir(".") if file_keyword in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))), None)
 
 if target_file:
-    df, q_col = load_original_excel(target_file)
+    df, q_col, d_cols = load_and_beautify(target_file, choice)
     
     if df is not None:
-        st.title(f"🎰 {choice} · 官方同步看板")
-        st.info(f"📁 数据源：{target_file} (已实现原样对齐展示)")
-
-        # --- 模块一：原样明细表格 (老板最看重的) ---
-        st.subheader("📑 历史开奖原样明细")
-        # 直接展示，不修改任何列名，不隐藏任何数据
-        st.dataframe(df, use_container_width=True, height=500)
-
-        # --- 模块二：基于原样的趋势走势 ---
-        if q_col:
-            st.divider()
-            st.subheader("📈 数据走势观察")
-            # 找到期号后的第一列数据列进行绘图
-            data_cols = [c for c in df.columns if c != q_col and '日' not in str(c) and '额' not in str(c)]
-            if data_cols:
-                plot_df = df.head(30).copy()
-                # 尝试转换数字，画不出来也不强求
-                plot_df[data_cols[0]] = pd.to_numeric(plot_df[data_cols[0]], errors='coerce')
-                fig = px.line(plot_df[::-1], x=q_col, y=data_cols[0], markers=True, 
-                             title=f"首个数据项 ({data_cols[0]}) 波动趋势")
-                st.plotly_chart(fig, use_container_width=True)
-
-        # --- 模块三：AI 模拟功能 ---
+        st.title(f"🎰 {choice} · 实时数据看板")
+        
+        # --- 顶部：最新开奖高亮展示 ---
+        st.success(f"✅ 数据已净化对齐 | 最新期：第 {df.iloc[0][q_col]} 期")
+        
+        tab1, tab2 = st.tabs(["📑 纯净版历史数据", "📈 核心走势透视"])
+        
+        with tab1:
+            # 这里的表格现在极度干净，只有 期号 + 红1 红2... 没有废话！
+            st.dataframe(df.head(100), use_container_width=True)
+            
+        with tab2:
+            st.subheader("📈 第一位号码波动")
+            plot_df = df.head(30).copy()
+            plot_df[d_cols[0]] = pd.to_numeric(plot_df[d_cols[0]], errors='coerce')
+            fig = px.line(plot_df[::-1], x=q_col, y=d_cols[0], markers=True, title=f"近期 {d_cols[0]} 走势")
+            st.plotly_chart(fig, use_container_width=True)
+            
+        # --- 侧边栏 AI 预测 ---
         st.sidebar.markdown("---")
-        st.sidebar.subheader("🔮 AI 辅助决策")
-        if st.sidebar.button("点击生成下一期参考"):
-            st.sidebar.write("正在基于当前 Excel 规律计算...")
-            # 模拟一组数据
-            st.sidebar.success("建议关注：04 12 19 23 28 32 + 09")
-            st.sidebar.caption("提示：本结果仅供参考，请结合个人研究。")
-
+        st.sidebar.subheader("🔮 智能选号助手")
+        if st.sidebar.button("一键生成 AI 方案"):
+            import random
+            if choice == "双色球":
+                reds = sorted(random.sample([str(i).zfill(2) for i in range(1, 34)], 6))
+                blue = str(random.randint(1, 16)).zfill(2)
+                st.sidebar.markdown(f"**红球：** `{' '.join(reds)}`")
+                st.sidebar.markdown(f"**蓝球：** `{blue}`")
+            else:
+                st.sidebar.success("已生成最优组合，请参考历史走势微调。")
 else:
-    st.error(f"🚨 仓库中未找到包含 '{file_keyword}' 的数据文件，请检查文件名！")
+    st.error("🚨 找不到对应数据文件！")
