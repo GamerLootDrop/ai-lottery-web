@@ -34,14 +34,12 @@ st.markdown("""
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
-        # 智能检测多层表头
         df = pd.read_excel(file_path) if file_path.endswith('.xls') else pd.read_csv(file_path)
         if "Unnamed" in str(df.columns[0]) or "Unnamed" in str(df.columns[1]):
             df = pd.read_excel(file_path, skiprows=1) if file_path.endswith('.xls') else pd.read_csv(file_path, skiprows=1)
             
         df.columns = [str(c).strip() for c in df.columns]
         
-        # 寻找期号列并强制转为数字，剔除文字干扰行
         q_col = next((c for c in df.columns if '期' in c or 'NO' in c), df.columns[0])
         df[q_col] = pd.to_numeric(df[q_col], errors='coerce')
         df = df.dropna(subset=[q_col])
@@ -52,7 +50,6 @@ def load_full_data(file_path, choice):
         }
         n_balls, needs_zero = lottery_params.get(choice, (7, True))
         
-        # 智能跳过非球号列
         q_idx = df.columns.get_loc(q_col)
         raw_ball_cols = []
         for c in df.columns[q_idx+1:]:
@@ -60,18 +57,15 @@ def load_full_data(file_path, choice):
             raw_ball_cols.append(c)
             if len(raw_ball_cols) == n_balls: break
         
-        # 重命名并安全提取
         new_cols = [q_col] + [f"ball_{i+1}" for i in range(len(raw_ball_cols))]
         clean_df = df[[q_col] + raw_ball_cols].copy()
         clean_df.columns = new_cols
         
-        # 【核心修复】：安全转换，遇到空值或乱码填为 0，防止 astype(int) 崩溃
         for col in new_cols: 
             clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce').fillna(0).astype(int)
             
         return clean_df.sort_values(q_col, ascending=False), q_col, new_cols[1:], needs_zero
     except Exception as e:
-        # 万一失败，直接在网页打印底层错误代码！
         st.error(f"🚨 解析引擎报错详情: {str(e)}")
         return None, None, None, None
 
@@ -95,10 +89,23 @@ def get_prediction_sets(choice):
         results.append({"strategy": s, "text": nums, "html": html_balls})
     return results
 
+# --- 初始化 Session State（记忆系统）---
+if 'pred_sets' not in st.session_state:
+    st.session_state.pred_sets = None
+if 'copy_text' not in st.session_state:
+    st.session_state.copy_text = ""
+if 'current_choice' not in st.session_state:
+    st.session_state.current_choice = ""
+
 # --- 4. 界面展示 ---
 LOTTERY_FILES = {"福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"}
 st.sidebar.title("💎 AI 大数据决策终端")
 choice = st.sidebar.selectbox("🎯 选择实战彩种", list(LOTTERY_FILES.keys()))
+
+# 如果切换了彩种，清空之前的预测记忆
+if choice != st.session_state.current_choice:
+    st.session_state.pred_sets = None
+    st.session_state.current_choice = choice
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 显示选项")
@@ -149,18 +156,28 @@ if target_file:
                     
                     copy_text = f"【{choice} AI智算推荐】\n"
                     for p in pred_sets:
-                        st.markdown(f"""
-                        <div class='pred-row'>
-                            <div class='pred-title'>{p['strategy']}</div>
-                            <div class='pred-balls'>{p['html']}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
                         copy_text += f"{p['strategy']}: {p['text']}\n"
                     
-                    st.markdown("---")
-                    if st.button("📋 一键复制所有推荐号码"):
-                        st.code(copy_text)
-                        st.toast("号码已整理，请直接复制上方灰色区域内容！", icon='✅')
+                    # 存入记忆体
+                    st.session_state.pred_sets = pred_sets
+                    st.session_state.copy_text = copy_text
+            
+            # 如果记忆体里有预测数据，就一直显示出来（不怕刷新）
+            if st.session_state.pred_sets is not None:
+                for p in st.session_state.pred_sets:
+                    st.markdown(f"""
+                    <div class='pred-row'>
+                        <div class='pred-title'>{p['strategy']}</div>
+                        <div class='pred-balls'>{p['html']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.markdown("---")
+                st.success("✅ 号码已生成！请点击下方纯文本框 **右上角的两个重叠方块图标**，即可一键复制全部号码。")
+                
+                # 直接渲染代码块，利用 Streamlit 原生的复制按钮
+                st.code(st.session_state.copy_text, language="text")
+
     else: 
         st.error("数据载入失败，请查看上方具体的错误详情。")
 else: 
