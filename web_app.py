@@ -2,13 +2,11 @@ import streamlit as st
 import pandas as pd
 import os
 
-# --- 1. 页面与深度定制样式 (完美复刻老板截图) ---
+# --- 1. 经典界面样式 ---
 st.set_page_config(page_title="AI 智算博弈中心", layout="wide")
 st.markdown("""
     <style>
-    .block-container { padding: 1.5rem !important; max-width: 800px; } /* 居中紧凑显示更好看 */
-    
-    /* 经典历史表格样式 */
+    .block-container { padding: 1.5rem !important; max-width: 800px; }
     .hist-table { width: 100%; border-collapse: collapse; text-align: center; font-family: sans-serif; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; }
     .hist-table th { background-color: #f8f9fa; padding: 12px; border-bottom: 2px solid #eaeaea; color: #666; font-weight: bold; }
     .hist-table td { padding: 12px; border-bottom: 1px solid #f0f0f0; color: #333; font-size: 15px; }
@@ -22,26 +20,51 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 数据清洗引擎 (保持数据精准提取) ---
+# --- 2. 智能提取引擎 (修复漏球、错位问题) ---
 def load_and_beautify(file_path, choice):
     try:
         df = pd.read_excel(file_path, skiprows=1) if file_path.endswith('.xls') else pd.read_csv(file_path, skiprows=1)
         df.columns = [str(c).strip() for c in df.columns]
         
+        # 1. 找到期号列
         q_col = next((c for c in df.columns if '期' in c or 'NO' in c), df.columns[0])
         q_idx = df.columns.get_loc(q_col)
         
+        # 2. 确认各个彩种需要的球数
         ball_counts = {"双色球": 7, "大乐透": 7, "福彩3D": 3, "快乐8": 20, "排列3": 3, "排列5": 5, "七星彩": 7}
         n_balls = ball_counts.get(choice, 7)
-        raw_ball_cols = df.columns[q_idx+1 : q_idx+1+n_balls]
         
+        # 3. 智能抓取号码列 (核心修复点：跳过日期列)
+        raw_ball_cols = []
+        for c in df.columns[q_idx+1:]:
+            c_str = str(c)
+            # 过滤掉明显的日期、时间、销售额等列
+            if any(x in c_str for x in ['日', '周', '时', '售', '额']): 
+                continue
+            
+            # 检查这列的真实数据，防止遇到 "2024-01-01" 格式的日期
+            first_val = str(df[c].dropna().iloc[0]) if not df[c].dropna().empty else ""
+            if "-" in first_val or ":" in first_val: 
+                continue
+            
+            # 确认为有效号码列，加入列表
+            raw_ball_cols.append(c)
+            if len(raw_ball_cols) == n_balls:
+                break  # 抓够球数就停止！
+        
+        # 4. 根据规则给球染色命名
         rename_dict = {q_col: "期号"}
         for i, c in enumerate(raw_ball_cols):
-            if choice == "双色球": rename_dict[c] = "蓝球" if i == 6 else f"红{i+1}"
-            elif choice == "大乐透": rename_dict[c] = f"蓝{i-4}" if i >= 5 else f"红{i+1}"
-            else: rename_dict[c] = f"球{i+1}"
+            if choice == "双色球": 
+                rename_dict[c] = "蓝球" if i == 6 else f"红{i+1}"
+            elif choice == "大乐透": 
+                rename_dict[c] = f"蓝{i-4}" if i >= 5 else f"红{i+1}"
+            else: 
+                rename_dict[c] = f"球{i+1}"
                 
         clean_df = df[[q_col] + list(raw_ball_cols)].rename(columns=rename_dict)
+        
+        # 5. 清洗数据类型
         for col in clean_df.columns:
             if col != "期号":
                 clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce').fillna(-1).astype(int)
@@ -51,27 +74,23 @@ def load_and_beautify(file_path, choice):
     except Exception as e:
         return None, None, None
 
-# --- 3. 核心：渲染经典明细列表 ---
+# --- 3. 渲染历史表格 ---
 def render_classic_history(df, q_col, d_cols, choice):
     html = "<table class='hist-table'>"
     html += "<tr><th style='width: 30%;'>期号</th><th>开奖号码</th></tr>"
     
-    # 默认展示近 100 期
     for _, row in df.head(100).iterrows():
         period = row[q_col]
         balls_html = ""
         
         for c in d_cols:
             val = row[c]
-            if val == -1: continue
+            if val == -1: continue 
             
-            # 判断是否需要补零 (3D等不需要补，双色球大乐透需要补)
-            if choice in ["福彩3D", "排列3", "排列5", "七星彩"]:
-                num_str = str(val)
-            else:
-                num_str = f"{val:02d}"
+            # 福彩3D等不需要补零，双色球大乐透补齐01,02格式
+            num_str = str(val) if choice in ["福彩3D", "排列3", "排列5", "七星彩"] else f"{val:02d}"
             
-            # 判断红蓝球颜色
+            # 判断颜色
             if "蓝" in c:
                 balls_html += f"<span class='b-ball'>{num_str}</span>"
             else:
@@ -97,13 +116,10 @@ target_file = next((f for f in os.listdir(".") if file_keyword in f.lower() and 
 if target_file:
     df, q_col, d_cols = load_and_beautify(target_file, choice)
     
-    if df is not None:
+    if df is not None and len(d_cols) > 0:
         st.title(f"🎰 {choice} · 历史开奖明细")
-        
-        # 召唤经典表格渲染引擎
         st.markdown(render_classic_history(df, q_col, d_cols, choice), unsafe_allow_html=True)
         
-        # 侧边栏 AI
         st.sidebar.markdown("---")
         if st.sidebar.button("🪄 AI 模拟下一期"):
             import random
@@ -111,7 +127,13 @@ if target_file:
                 reds = sorted(random.sample([str(i).zfill(2) for i in range(1, 34)], 6))
                 blue = str(random.randint(1, 16)).zfill(2)
                 st.sidebar.success(f"红球：{' '.join(reds)}\n蓝球：{blue}")
+            elif choice == "大乐透":
+                reds = sorted(random.sample([str(i).zfill(2) for i in range(1, 36)], 5))
+                blues = sorted(random.sample([str(i).zfill(2) for i in range(1, 13)], 2))
+                st.sidebar.success(f"前区：{' '.join(reds)}\n后区：{' '.join(blues)}")
             else:
                 st.sidebar.success("已完成演算，建议参考上表近期热号。")
+    else:
+        st.error("数据加载异常，请检查表格格式。")
 else:
     st.error("🚨 找不到对应数据文件，请检查仓库！")
