@@ -7,8 +7,9 @@ import requests
 from bs4 import BeautifulSoup
 import re  
 from collections import Counter
+from datetime import datetime
 
-# --- 1. 深度定制样式表 (🔥 新增：手机端适配 & 免责声明样式) ---
+# --- 1. 深度定制样式表 (🔥 新增：跑马灯动画 & 评论区样式) ---
 st.set_page_config(page_title="AI 大数据决策终端", layout="wide")
 st.markdown("""
     <style>
@@ -33,10 +34,23 @@ st.markdown("""
     .pred-balls { flex-grow: 1; }
     .pred-ball { display: inline-block; width: 34px; height: 34px; line-height: 34px; border-radius: 50%; color: white; font-weight: bold; margin: 3px 4px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.15); }
     
+    /* 📢 跑马灯样式 (滚动播报) */
+    .marquee-wrapper { background: linear-gradient(to right, #fff3cd, #fff8e1); padding: 10px 15px; border-radius: 8px; border-left: 4px solid #f9bf15; margin-bottom: 20px; overflow: hidden; display: flex; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+    .marquee-icon { font-size: 18px; margin-right: 10px; min-width: 25px; }
+    .marquee-content { white-space: nowrap; animation: marquee 25s linear infinite; color: #856404; font-weight: bold; font-size: 14px; }
+    @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(-150%); } }
+    
+    /* 💬 评论区样式 */
+    .comment-box { background: #fff; border: 1px solid #eaeaea; border-radius: 8px; padding: 15px; margin-bottom: 10px; }
+    .comment-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .comment-user { font-weight: bold; color: #1f77b4; font-size: 14px; }
+    .comment-time { color: #999; font-size: 12px; }
+    .comment-body { color: #444; font-size: 14px; line-height: 1.5; }
+    
     /* 底部免责声明 */
     .legal-footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #eaeaea; text-align: center; color: #999; font-size: 12px; line-height: 1.8; }
     
-    /* 📱 手机端专属适配 (响应式设计) */
+    /* 📱 手机端专属适配 */
     @media (max-width: 768px) {
         .block-container { padding: 0.5rem !important; }
         .hist-table th, .hist-table td { padding: 8px 4px; font-size: 12px; }
@@ -48,7 +62,29 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 混合双引擎数据提取 (🔥 保持不动，超级稳) ---
+# --- 初始化评论数据 (虚拟氛围组) ---
+if 'comments' not in st.session_state:
+    st.session_state.comments = [
+        {"user": "📱 广东网友 139****8821", "text": "刚刚用【深度拟合】生成了一组，感觉这期均线要拐头了，跟两注试试水！", "time": "3分钟前"},
+        {"user": "📱 山东网友 135****0012", "text": "这工具的冷热分布图太直观了，以前纯瞎蒙，现在起码有数据支撑了，给老板点赞👍", "time": "12分钟前"},
+        {"user": "📱 浙江网友 186****5921", "text": "昨天的绝地反弹差一点点！就差个蓝球！今天继续干！", "time": "半小时前"},
+        {"user": "📱 四川网友 138****3344", "text": "一键复制功能很方便，直接发给楼下彩票店老板就能打票。", "time": "1小时前"}
+    ]
+
+# --- 生成随机滚动播报数据 ---
+def get_fake_broadcasts(choice):
+    cities = ["广东", "浙江", "江苏", "山东", "河南", "四川", "北京", "上海"]
+    algos = ["极热寻踪", "绝地反弹", "黄金均衡", "蒙特卡洛", "深度拟合"]
+    broadcast_texts = []
+    for _ in range(5):
+        city = random.choice(cities)
+        phone = f"1{random.randint(3,9)}{random.randint(0,9)}****{random.randint(1000,9999)}"
+        algo = random.choice(algos)
+        mins = random.randint(1, 59)
+        broadcast_texts.append(f"【最新喜报】{city}用户 {phone} {mins}分钟前 使用「{algo}」生成了{choice}实战策略！")
+    return "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;🔥&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;".join(broadcast_texts)
+
+# --- 2. 混合双引擎数据提取 (🔥 保持不动) ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -83,45 +119,30 @@ def load_full_data(file_path, choice):
             clean_df.columns = new_names
             q_col = '期号' 
             
-            for c in new_names:
-                clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce').fillna(0).astype(int)
-                
+            for c in new_names: clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce').fillna(0).astype(int)
             needs_zero = True if choice in ["双色球", "大乐透"] else False
             return clean_df.sort_values(q_col, ascending=False), q_col, new_names[1:], needs_zero, file_path
-
         else:
             raw_df = pd.read_csv(file_path, header=None, dtype=str) if file_path.endswith('.csv') else pd.read_excel(file_path, header=None, dtype=str)
             if raw_df.empty: return None, None, None, None, None
-            
             limits = {"快乐8": 20, "排列5": 5, "七星彩": 7}
             max_balls = limits.get(choice, 7)
-            
             extracted_rows = []
             for idx, row in raw_df.iterrows():
                 nums = pd.to_numeric(row, errors='coerce')
                 valid_nums = nums.dropna().tolist()
-                
                 if len(valid_nums) >= max_balls + 1:
                     if valid_nums[0] < 1000 and valid_nums[1] > 1000:
-                        issue_num = int(valid_nums[1])
-                        balls_start = 2
+                        issue_num = int(valid_nums[1]); balls_start = 2
                     else:
-                        issue_num = int(valid_nums[0])
-                        balls_start = 1
-                        
+                        issue_num = int(valid_nums[0]); balls_start = 1
                     balls = [int(n) for n in valid_nums[balls_start : balls_start+max_balls]]
-                    if all(0 <= b <= 81 for b in balls):
-                        extracted_rows.append([issue_num] + balls)
-            
-            if not extracted_rows:
-                raise ValueError(f"在 {choice} 的文件里找不到任何有效的开奖数字！")
-            
+                    if all(0 <= b <= 81 for b in balls): extracted_rows.append([issue_num] + balls)
+            if not extracted_rows: raise ValueError(f"解析失败")
             new_names = ['期号'] + [f"b_{i+1}" for i in range(max_balls)]
             clean_df = pd.DataFrame(extracted_rows, columns=new_names)
-            
             needs_zero = True if choice == "快乐8" else False
             return clean_df.sort_values('期号', ascending=False), '期号', new_names[1:], needs_zero, file_path
-
     except Exception as e:
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
@@ -131,84 +152,53 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
     game_codes = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
     game_code = game_codes.get(choice, "ssq")
-    
     try:
-        status.info(f"📡 正在联网获取 {choice} 最新开奖数据...")
-        urls = [
-            f"https://datachart.500.com/{game_code}/history/newinc/history.php?limit=50",
-            f"https://datachart.500.com/{game_code}/history/inc/history.php?limit=50"
-        ]
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        
+        status.info(f"📡 正在联网获取 {choice} 最新开奖...")
+        urls = [f"https://datachart.500.com/{game_code}/history/newinc/history.php?limit=50", f"https://datachart.500.com/{game_code}/history/inc/history.php?limit=50"]
+        headers = {"User-Agent": "Mozilla/5.0"}
         web_rows = []
         for url in urls:
             res = requests.get(url, headers=headers, timeout=10)
             res.encoding = 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
-            
             tdata = soup.find('tbody', id='tdata')
-            if tdata: trs = tdata.find_all('tr')
-            else:
-                trs = soup.find_all('tr', class_=['t_tr1', 't_tr2', 't_tr'])
-                if not trs: trs = soup.find_all('tr')
-            
+            trs = tdata.find_all('tr') if tdata else (soup.find_all('tr', class_=['t_tr1', 't_tr2', 't_tr']) or soup.find_all('tr'))
             for tr in trs:
                 tds = tr.find_all('td')
                 if len(tds) < len(d_cols) + 1: continue 
-                
                 iss_str = re.sub(r'\D', '', tds[0].get_text(strip=True))
                 if len(iss_str) < 3: continue
                 issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
                 if issue_val == 0: continue
-                
                 rest_text = "   ".join([td.get_text(separator=" ") for td in tds[1:]])
-                
                 balls = []
-                if choice in ["福彩3D", "排列3", "排列5"]:
-                    balls = [int(n) for n in re.findall(r'\d', rest_text)]
+                if choice in ["福彩3D", "排列3", "排列5"]: balls = [int(n) for n in re.findall(r'\d', rest_text)]
                 elif choice == "七星彩":
                     groups = re.findall(r'\d+', rest_text)
                     for g in groups:
                         if len(g) >= 3: 
                             for char in g: balls.append(int(char))
                         else: balls.append(int(g))
-                else:
-                    balls = [int(n) for n in re.findall(r'\d+', rest_text)]
-                
+                else: balls = [int(n) for n in re.findall(r'\d+', rest_text)]
                 balls = [n for n in balls if 0 <= n <= 81]
                 if len(balls) >= len(d_cols):
                     row = {q_col: issue_val}
                     for i, col_name in enumerate(d_cols): row[col_name] = balls[i]
                     web_rows.append(row)
-            if len(web_rows) > 0: break
+            if web_rows: break
 
         if web_rows:
             web_df = pd.DataFrame(web_rows)
-            def safe_format(val):
-                try:
-                    s = str(int(float(val)))
-                    return int("20" + s) if len(s) == 5 else int(s)
-                except: return 0
-            df[q_col] = df[q_col].apply(safe_format)
-            
-            updated = pd.concat([web_df, df], ignore_index=True)
-            updated = updated.drop_duplicates(subset=[q_col], keep='first')
-            updated = updated.sort_values(q_col, ascending=False)
-            updated = updated[updated[q_col] > 0] 
-            
+            df[q_col] = df[q_col].apply(lambda x: int(float(x)) if len(str(int(float(x))))!=5 else int("20"+str(int(float(x)))))
+            updated = pd.concat([web_df, df], ignore_index=True).drop_duplicates(subset=[q_col], keep='first').sort_values(q_col, ascending=False)
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated.to_csv(save_path, index=False, encoding='utf-8-sig')
-            
-            status.success(f"✅ 同步成功！已为 {choice} 更新 {len(web_rows)} 期数据。")
+            status.success(f"✅ 同步成功！已更新 {len(web_rows)} 期。")
             st.cache_data.clear()
-            time.sleep(1.5)
+            time.sleep(1)
             st.rerun()
-        else:
-            status.error("❌ 抓取失败：接口未返回数据。")
-            time.sleep(2)
-            status.empty()
-    except Exception as e:
-        status.error(f"❌ 同步失败: {str(e)}")
+        else: status.error("❌ 抓取失败。")
+    except Exception as e: status.error(f"❌ 同步失败: {str(e)}")
 
 # --- 4. 预测引擎 (🔥 保持不动) ---
 def get_prediction(choice):
@@ -270,7 +260,18 @@ if target:
             sync_latest_data(df, q_col, d_cols, choice, actual_path)
 
         st.title(f"🎰 {choice} 数据智算中心")
-        t1, t2, t3 = st.tabs(["📜 历史数据", "📈 深度走势", "🤖 AI 演算"])
+        
+        # 📢 插入动态跑马灯
+        broadcast_str = get_fake_broadcasts(choice)
+        st.markdown(f"""
+        <div class="marquee-wrapper">
+            <div class="marquee-icon">📢</div>
+            <div class="marquee-content">{broadcast_str}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 增加第四个标签页：交流大厅
+        t1, t2, t3, t4 = st.tabs(["📜 历史数据", "📈 深度走势", "🤖 AI 演算", "💬 交流大厅"])
         
         with t1:
             table_html = "<table class='hist-table'><tr><th>期号</th><th>开奖号码</th></tr>"
@@ -286,10 +287,8 @@ if target:
                     elif choice in ["排列3", "排列5", "福彩3D"]: bg = "bg-purple"
                     balls_html += f"<span class='ball {bg}'>{txt}</span>"
                     if choice == "快乐8" and i == 9: balls_html += "<br>"
-
                 try: display_q = int(float(row[q_col]))
                 except: display_q = row[q_col]
-                    
                 table_html += f"<tr><td><b>{display_q}</b></td><td>{balls_html}</td></tr>"
             st.markdown(table_html + "</table>", unsafe_allow_html=True)
             
@@ -297,16 +296,12 @@ if target:
             st.markdown("### 📊 和值趋势与均线分析")
             calc_df = df.head(view_limit).copy()
             calc_df['和值'] = calc_df[d_cols].sum(axis=1)
-            # 反转数据以按时间正序绘图
             plot_df = calc_df.sort_values(q_col).set_index(q_col)
-            # 计算5期简单移动平均线 (SMA5)
             plot_df['5期均值 (MA5)'] = plot_df['和值'].rolling(window=5, min_periods=1).mean()
-            # 绘制包含和值与均线的复合折线图
             st.line_chart(plot_df[['和值', '5期均值 (MA5)']])
             
             st.markdown("### 🔥 冷热号码频次分布图")
             st.caption(f"统计范围：当前选定的 {view_choice} 数据")
-            # 展平所有开奖号码，统计频次
             all_nums = calc_df[d_cols].values.flatten()
             counter = Counter(all_nums)
             freq_df = pd.DataFrame(list(counter.items()), columns=['号码', '出现次数']).sort_values('号码')
@@ -316,22 +311,47 @@ if target:
         with t3:
             st.info("💡 提示：点击下方代码框右上角的 📋 图标即可一键复制预测号码进行打票。")
             if st.button("🚀 启动 AI 深度演算 (生成最新策略)", use_container_width=True):
-                with st.spinner('AI 正在调取蒙特卡洛树计算引擎...'):
-                    time.sleep(1)
+                with st.spinner('AI 正在调取蒙特卡洛树计算引擎...'): time.sleep(1)
                 for p in get_prediction(choice):
-                    st.markdown(f"""
-                    <div class='pred-row'>
-                        <div class='pred-title'>{p['name']}</div>
-                        <div class='pred-balls'>{p['html']}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    # 优化一键复制：使用 Streamlit 自带的漂亮代码块
+                    st.markdown(f"<div class='pred-row'><div class='pred-title'>{p['name']}</div><div class='pred-balls'>{p['html']}</div></div>", unsafe_allow_html=True)
                     st.code(f"【{choice}】{p['name']} 推荐号码: {p['text']}", language="markdown")
+        
+        # 💬 新增评论区标签页
+        with t4:
+            st.markdown("### 🏆 彩民实战交流区")
+            st.caption("分享您的实战心得，与全国彩友一起探讨走势规律！")
+            
+            # 显示现有评论
+            for c in st.session_state.comments:
+                st.markdown(f"""
+                <div class="comment-box">
+                    <div class="comment-header">
+                        <span class="comment-user">{c['user']}</span>
+                        <span class="comment-time">{c['time']}</span>
+                    </div>
+                    <div class="comment-body">{c['text']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            st.markdown("---")
+            # 发布新评论输入框
+            user_input = st.text_input("💡 留下您的看法...")
+            if st.button("发布评论", type="primary"):
+                if user_input:
+                    # 将新评论插入到列表最前面
+                    st.session_state.comments.insert(0, {
+                        "user": "📱 当前用户 (我)",
+                        "text": user_input,
+                        "time": "刚刚"
+                    })
+                    st.rerun()
+                else:
+                    st.warning("请先输入评论内容哦！")
                     
-    else: st.error("数据加载已终止。如果您刚才遇到了报错，请点击左侧红色的【清理缓存急救】按钮。")
+    else: st.error("数据加载失败。如果您刚才遇到了报错，请点击左侧红色的【清理缓存急救】按钮。")
 else: st.error(f"未找到 {choice} 的数据文件。")
 
-# --- 6. 官方免责声明 (🔥 新增：法律规避必备) ---
+# --- 6. 官方免责声明 ---
 st.markdown("""
     <div class="legal-footer">
         <b>免责声明</b><br>
