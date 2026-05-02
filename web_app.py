@@ -5,6 +5,7 @@ import time
 import random
 import requests
 from datetime import datetime
+from bs4 import BeautifulSoup
 
 # --- 1. 深度定制样式表 ---
 st.set_page_config(page_title="AI 大数据决策终端", layout="wide")
@@ -70,28 +71,63 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析引擎报错详情: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 核心新增：官方真实接口抓取引擎 ---
+# --- 3. 核心新增：海外穿透版抓取引擎（数据绝对安全版） ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
-    latest_local_issue = int(df[q_col].max())
+    latest_local_issue = int(df[q_col].max()) # 记住当前本地最新期号，绝不覆盖老数据
     status_text = st.empty()
     progress_bar = st.progress(0)
     
-    status_text.info(f"📡 正在直连 {choice} 官方数据中心...")
+    status_text.info(f"📡 正在通过海外穿透通道连接 {choice} 数据中心...")
     progress_bar.progress(30)
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
     new_rows = []
     try:
-        if choice in ["双色球", "福彩3D", "快乐8"]:
-            headers["Referer"] = "http://www.cwl.gov.cn/"
-            code_map = {"双色球": "ssq", "福彩3D": "3d", "快乐8": "kl8"}
-            url = f"http://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name={code_map[choice]}&issueCount=10"
+        if choice == "双色球":
+            # 突破封锁：使用 500彩票网 数据源，专抓48期及之后的新数据
+            url = "https://datachart.500.com/ssq/history/newinc/history.php?limit=15"
             res = requests.get(url, headers=headers, timeout=10)
-            res.raise_for_status()
+            res.encoding = 'utf-8'
+            soup = BeautifulSoup(res.text, 'html.parser')
+            tdata = soup.find('tbody', id='tdata')
+            
+            if tdata:
+                for tr in tdata.find_all('tr'):
+                    if tr.has_attr('class') and 'hide' in tr['class']: continue 
+                    tds = tr.find_all('td')
+                    if len(tds) > 7:
+                        issue = int(tds[0].text.strip())
+                        # 核心防线：只有比本地最大的期号还要大的新数据，才会被抓取进来
+                        if issue > latest_local_issue:
+                            all_balls = [int(tds[i].text.strip()) for i in range(1, 8)]
+                            row = {q_col: issue}
+                            for i, col in enumerate(d_cols):
+                                row[col] = all_balls[i] if i < len(all_balls) else 0
+                            new_rows.append(row)
+
+        elif choice in ["大乐透", "排列3", "排列5", "七星彩"]:
+            game_map = {"大乐透": "85", "排列3": "35", "排列5": "35", "七星彩": "04"}
+            url = f"https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry?gameNo={game_map[choice]}&pageSize=15&pageNo=1"
+            res = requests.get(url, headers=headers, timeout=10)
+            data = res.json().get('value', {}).get('list', [])
+            
+            for item in data:
+                issue = int(item['lotteryDrawNum'])
+                if issue > latest_local_issue:
+                    balls = item['lotteryDrawResult'].split(' ')
+                    all_balls = [int(x) for x in balls if x]
+                    row = {q_col: issue}
+                    for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
+                    new_rows.append(row)
+                    
+        elif choice in ["福彩3D", "快乐8"]:
+            headers["Referer"] = "http://www.cwl.gov.cn/"
+            code_map = {"福彩3D": "3d", "快乐8": "kl8"}
+            url = f"http://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name={code_map[choice]}&issueCount=15"
+            res = requests.get(url, headers=headers, timeout=10)
             data = res.json().get('result', [])
             
             for item in data:
@@ -104,25 +140,10 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
                     for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
                     new_rows.append(row)
                     
-        elif choice in ["大乐透", "排列3", "排列5", "七星彩"]:
-            game_map = {"大乐透": "85", "排列3": "35", "排列5": "35", "七星彩": "04"}
-            url = f"https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry?gameNo={game_map[choice]}&pageSize=10&pageNo=1"
-            res = requests.get(url, headers=headers, timeout=10)
-            res.raise_for_status()
-            data = res.json().get('value', {}).get('list', [])
-            
-            for item in data:
-                issue = int(item['lotteryDrawNum'])
-                if issue > latest_local_issue:
-                    balls = item['lotteryDrawResult'].split(' ')
-                    all_balls = [int(x) for x in balls if x]
-                    row = {q_col: issue}
-                    for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
-                    new_rows.append(row)
-                    
         progress_bar.progress(80)
         
         if new_rows:
+            # 将新抓到的数据（比如048期）接在老数据的最上面，绝对不破坏旧数据
             new_df = pd.DataFrame(new_rows).sort_values(q_col, ascending=False)
             updated_df = pd.concat([new_df, df], ignore_index=True)
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
@@ -139,7 +160,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             time.sleep(2)
             
     except Exception as e:
-        status_text.error(f"❌ 官方接口连接失败: {str(e)}")
+        status_text.error(f"❌ 通道连接失败: {str(e)}")
     
     finally:
         progress_bar.empty()
