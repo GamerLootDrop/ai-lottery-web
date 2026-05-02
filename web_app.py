@@ -71,9 +71,14 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析引擎报错详情: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 核心新增：海外穿透版抓取引擎（数据绝对安全版） ---
+# --- 3. 核心新增：海外穿透版抓取引擎（修复期号对比如Bug、修复乱码数据Bug） ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
-    latest_local_issue = int(df[q_col].max()) # 记住当前本地最新期号，绝不覆盖老数据
+    # 核心修复 1：把抓到的5位缩写期号统一补齐为7位，和本地数据库统一维度，这样就不会发生 26048 < 2026047 的误判！
+    def normalize_issue(iss):
+        iss_str = str(iss).strip()
+        return int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
+
+    latest_local_issue = df[q_col].apply(normalize_issue).max()
     status_text = st.empty()
     progress_bar = st.progress(0)
     
@@ -87,7 +92,6 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     new_rows = []
     try:
         if choice == "双色球":
-            # 突破封锁：使用 500彩票网 数据源，专抓48期及之后的新数据
             url = "https://datachart.500.com/ssq/history/newinc/history.php?limit=15"
             res = requests.get(url, headers=headers, timeout=10)
             res.encoding = 'utf-8'
@@ -99,14 +103,19 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
                     if tr.has_attr('class') and 'hide' in tr['class']: continue 
                     tds = tr.find_all('td')
                     if len(tds) > 7:
-                        issue = int(tds[0].text.strip())
-                        # 核心防线：只有比本地最大的期号还要大的新数据，才会被抓取进来
-                        if issue > latest_local_issue:
-                            all_balls = [int(tds[i].text.strip()) for i in range(1, 8)]
-                            row = {q_col: issue}
-                            for i, col in enumerate(d_cols):
-                                row[col] = all_balls[i] if i < len(all_balls) else 0
-                            new_rows.append(row)
+                        raw_issue = tds[0].text.strip()
+                        issue_7d = normalize_issue(raw_issue) # 补齐期号
+                        
+                        if issue_7d > latest_local_issue:
+                            # 核心修复 2：绝对定位抓取！用特定的HTML样式属性去匹配红球(t_cfont2)和蓝球(t_cfont4)，防止抓到垃圾列
+                            red_tds = tr.find_all('td', class_='t_cfont2')
+                            blue_tds = tr.find_all('td', class_='t_cfont4')
+                            if len(red_tds) == 6 and len(blue_tds) >= 1:
+                                all_balls = [int(td.text.strip()) for td in red_tds] + [int(blue_tds[0].text.strip())]
+                                row = {q_col: issue_7d}
+                                for i, col in enumerate(d_cols):
+                                    row[col] = all_balls[i] if i < len(all_balls) else 0
+                                new_rows.append(row)
 
         elif choice in ["大乐透", "排列3", "排列5", "七星彩"]:
             game_map = {"大乐透": "85", "排列3": "35", "排列5": "35", "七星彩": "04"}
@@ -115,11 +124,12 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             data = res.json().get('value', {}).get('list', [])
             
             for item in data:
-                issue = int(item['lotteryDrawNum'])
-                if issue > latest_local_issue:
+                raw_issue = item['lotteryDrawNum']
+                issue_7d = normalize_issue(raw_issue)
+                if issue_7d > latest_local_issue:
                     balls = item['lotteryDrawResult'].split(' ')
                     all_balls = [int(x) for x in balls if x]
-                    row = {q_col: issue}
+                    row = {q_col: issue_7d}
                     for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
                     new_rows.append(row)
                     
@@ -131,25 +141,27 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             data = res.json().get('result', [])
             
             for item in data:
-                issue = int(item['code'])
-                if issue > latest_local_issue:
+                raw_issue = item['code']
+                issue_7d = normalize_issue(raw_issue)
+                if issue_7d > latest_local_issue:
                     reds = item['red'].split(',')
                     blues = item.get('blue', '').split(',') if item.get('blue') else []
                     all_balls = [int(x) for x in reds + blues if x]
-                    row = {q_col: issue}
+                    row = {q_col: issue_7d}
                     for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
                     new_rows.append(row)
                     
         progress_bar.progress(80)
         
         if new_rows:
-            # 将新抓到的数据（比如048期）接在老数据的最上面，绝对不破坏旧数据
             new_df = pd.DataFrame(new_rows).sort_values(q_col, ascending=False)
             updated_df = pd.concat([new_df, df], ignore_index=True)
+            # 确保期号列没有小数点
+            updated_df[q_col] = updated_df[q_col].astype(int)
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated_df.to_csv(save_path, index=False, encoding='utf-8-sig')
             
-            status_text.success(f"✅ 同步成功！补齐了 {len(new_rows)} 期最新数据！")
+            status_text.success(f"✅ 同步成功！完美补齐了 {len(new_rows)} 期正确数据！")
             progress_bar.progress(100)
             time.sleep(2)
             st.cache_data.clear()
