@@ -26,7 +26,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 自适应数据提取 (原封不动) ---
+# --- 2. 自适应数据提取 (最稳定的本地原封不动版) ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -68,14 +68,27 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 同步最新数据 (融合了最新无敌正则降维打击版) ---
+# --- 3. 同步最新数据 (🚨 已修复 500.com 接口差异暗坑) ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
-    api_map = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
+    
+    # 💡 致命 Bug 修复处：新老彩种网站目录根本不一样！
+    api_map = {
+        "双色球": "ssq/history/newinc/history.php", 
+        "大乐透": "dlt/history/newinc/history.php", 
+        "福彩3D": "sd/history/inc/history.php", 
+        "排列3": "pls/history/inc/history.php", 
+        "排列5": "plw/history/inc/history.php", 
+        "七星彩": "qxc/history/inc/history.php", 
+        "快乐8": "kl8/history/inc/history.php"
+    }
     
     try:
         status.info(f"📡 正在联网获取 {choice} 最新开奖数据...")
-        url = f"https://datachart.500.com/{api_map.get(choice, 'ssq')}/history/newinc/history.php?limit=50"
+        
+        # 提取正确的专属网页路径
+        url_path = api_map.get(choice, "ssq/history/newinc/history.php")
+        url = f"https://datachart.500.com/{url_path}?limit=50"
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -84,16 +97,20 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
         
+        # 兼容处理：老接口 inc 网页没用 tbody id="tdata"，只能通过 class 找
         tdata = soup.find('tbody', id='tdata')
-        trs = tdata.find_all('tr') if tdata else soup.find_all('tr')
+        if tdata:
+            trs = tdata.find_all('tr')
+        else:
+            trs = soup.find_all('tr', class_=['t_tr1', 't_tr2', 't_tr'])
+            if not trs: trs = soup.find_all('tr')
         
         web_rows = []
         for tr in trs:
             tds = tr.find_all('td')
-            # 容错：如果列数太少，直接跳过，防止报错
             if len(tds) < len(d_cols) + 1: continue 
             
-            # 1. 暴力提取期号，剔除所有乱七八糟的字符，杜绝 int() 报错
+            # 1. 暴力提取期号
             iss_raw = tds[0].get_text(strip=True)
             iss_str = re.sub(r'\D', '', iss_raw)
             if len(iss_str) < 3: continue
@@ -101,16 +118,21 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
             if issue_val == 0: continue
             
-            # 2. 暴力提取所有数字，无视后面的中文、和值、隐藏列
-            rest_text = " ".join([td.get_text(separator=" ") for td in tds[1:]])
-            all_digits = [int(n) for n in re.findall(r'\d+', rest_text)]
+            # 2. 暴力提取数字（用大量空格隔开，防止连体）
+            rest_text = "   ".join([td.get_text(separator=" ") for td in tds[1:]])
             
-            # 过滤出 0-81 范围内的常规开奖号码
+            # 💡 精确打击：如果是个位数彩种，强制提取单个数字，杜绝 100 这种东西混进来！
+            if choice in ["福彩3D", "排列3", "排列5", "七星彩"]:
+                all_digits = [int(n) for n in re.findall(r'\d', rest_text)]
+            else:
+                all_digits = [int(n) for n in re.findall(r'\d+', rest_text)]
+            
+            # 过滤范围
             balls = [n for n in all_digits if 0 <= n <= 81]
             
-            # 3. 严格按照当前彩种需要的号码数量进行截断
+            # 3. 严格截断（您最稳的方法，原封不动）
             if len(balls) >= len(d_cols):
-                balls = balls[:len(d_cols)] # 例如只要前7个，后面多出来的扔掉
+                balls = balls[:len(d_cols)] 
                 
                 row = {q_col: issue_val}
                 for i, col_name in enumerate(d_cols):
@@ -120,7 +142,6 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         if web_rows:
             web_df = pd.DataFrame(web_rows)
             
-            # 统一本地数据期号格式，防报错
             def safe_format(val):
                 try:
                     s = str(int(float(val)))
@@ -132,7 +153,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             updated = pd.concat([web_df, df], ignore_index=True)
             updated = updated.drop_duplicates(subset=[q_col], keep='first')
             updated = updated.sort_values(q_col, ascending=False)
-            updated = updated[updated[q_col] > 0] # 滤除错误期号
+            updated = updated[updated[q_col] > 0] 
             
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated.to_csv(save_path, index=False, encoding='utf-8-sig')
@@ -142,7 +163,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             time.sleep(1.5)
             st.rerun()
         else:
-            status.error("❌ 网站暂无更新，或被防爬规则拦截。")
+            status.error("❌ 抓取失败：网页结构异常或被防爬拦截。")
             time.sleep(2)
             status.empty()
     except Exception as e:
