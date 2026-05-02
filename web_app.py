@@ -67,7 +67,7 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 强制纠错式同步 (新增防拦截伪装) ---
+# --- 3. 强制纠错式同步 (安全防错版) ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     def normalize_issue(iss):
         try:
@@ -79,10 +79,9 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     api_map = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
     
     try:
-        status.info(f"📡 正在突破拦截，抓取 {choice} 最新数据...")
+        status.info(f"📡 正在抓取 {choice} 最新数据...")
         url = f"https://datachart.500.com/{api_map.get(choice, 'ssq')}/history/newinc/history.php?limit=50"
         
-        # 增加 User-Agent，防止云端运行被拦截
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
@@ -101,7 +100,13 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
                 issue_val = normalize_issue(tds[0].text.strip())
                 if issue_val == 0: continue
                 
-                balls = [int(td.text.strip()) for td in tr.find_all('td', class_=['t_cfont2', 't_cfont4'])]
+                # 【核心修复】：增加 isdigit() 判断，安全过滤空字符串或非数字
+                balls = []
+                for td in tr.find_all('td', class_=['t_cfont2', 't_cfont4']):
+                    txt = td.text.strip()
+                    if txt.isdigit():  # 必须是纯数字才转换
+                        balls.append(int(txt))
+                
                 if not balls:
                     balls = [int(td.text.strip()) for td in tds[1:] if td.text.strip().isdigit()][:len(d_cols)]
                 
@@ -128,7 +133,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             time.sleep(1.5)
             st.rerun()
         else:
-            status.error("❌ 网站暂无更新，或防爬虫规则发生变更。")
+            status.error("❌ 网站暂无更新，或未能找到有效数字。")
             time.sleep(2)
             status.empty()
     except Exception as e:
@@ -171,13 +176,12 @@ if target:
     df, q_col, d_cols, needs_zero, actual_path = load_full_data(target, choice)
     if df is not None:
         
-        # ========== 恢复的显示选项面板 ==========
+        # ========== 显示选项面板 ==========
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 🗓️ 显示选项")
         view_options = {"近20期": 20, "近50期": 50, "近100期": 100, "近200期": 200, "显示全部": len(df)}
         view_choice = st.sidebar.radio("选择查看/分析范围", list(view_options.keys()), index=1)
         view_limit = view_options[view_choice]
-        # =======================================
 
         st.sidebar.markdown("---")
         st.sidebar.markdown(f"**最新期号：** `{int(df[q_col].max())}`")
@@ -191,7 +195,6 @@ if target:
             st.write(f"当前视图：**{view_choice}** (本地数据库共计 {len(df)} 期)")
             table_html = "<table class='hist-table'><tr><th>期号</th><th>开奖号码</th></tr>"
             
-            # 使用用户选择的显示条数 (view_limit)
             for _, row in df.head(view_limit).iterrows():
                 balls_html = ""
                 for i, col in enumerate(d_cols):
