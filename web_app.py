@@ -68,11 +68,10 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 终极同步数据引擎 (修复了不同彩种网址不同的致命Bug) ---
+# --- 3. 终极同步引擎 (双轨制 + 防内存溢出拦截) ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
     
-    # 核心修复点：为每个彩种指定精准的抓取网址 (区分 newinc 和 inc)
     url_map = {
         "双色球": "https://datachart.500.com/ssq/history/newinc/history.php?limit=50",
         "大乐透": "https://datachart.500.com/dlt/history/newinc/history.php?limit=50",
@@ -85,14 +84,10 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     
     try:
         url = url_map.get(choice)
-        if not url:
-            status.error(f"❌ 暂不支持 {choice} 的自动同步")
-            return
-
-        status.info(f"📡 正在连接 {choice} 专属数据源...")
+        status.info(f"📡 正在连接 {choice} 专属数据通道...")
         
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = 'utf-8'
@@ -106,19 +101,61 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             tds = tr.find_all('td')
             if len(tds) < len(d_cols) + 1: continue 
             
-            iss_raw = tds[0].get_text(strip=True)
-            iss_str = re.sub(r'\D', '', iss_raw)
-            if len(iss_str) < 3: continue
+            balls = []
+            issue_val = 0
             
-            issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
-            if issue_val == 0: continue
+            # ========== 【核心分流逻辑】 ==========
+            if choice in ["双色球", "大乐透"]:
+                # 👉 路线A：【不动如山版】专门服务双色球/大乐透
+                iss_raw = tds[0].get_text(strip=True)
+                iss_str = re.sub(r'\D', '', iss_raw)
+                if len(iss_str) < 3: continue
+                issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
+                if issue_val == 0: continue
+                
+                for td in tr.find_all('td', class_=['t_cfont2', 't_cfont4']):
+                    txt = td.get_text(strip=True)
+                    if re.match(r'^\d+$', txt):
+                        balls.append(int(txt))
+                if not balls:
+                    for td in tds[1:]:
+                        txt = td.get_text(strip=True)
+                        if re.match(r'^\d+$', txt):
+                            balls.append(int(txt))
+                        if len(balls) == len(d_cols): break
+
+            else:
+                # 👉 路线B：【细胞级扫描版】专治福彩3D/排列3等杂乱表格
+                start_idx = 1
+                # 寻找真实的期号列（通常是5、7、8位数字）
+                for idx, td in enumerate(tds):
+                    txt = td.get_text(strip=True)
+                    digits = re.sub(r'\D', '', txt)
+                    if 5 <= len(digits) <= 8:
+                        issue_val = int("20" + digits) if len(digits) == 5 else int(digits)
+                        start_idx = idx + 1
+                        break
+                
+                if issue_val == 0: continue
+                
+                # 扫描后续单元格，只要是1到2位的纯数字，就吸纳为球号
+                for td in tds[start_idx:]:
+                    txt = td.get_text(strip=True)
+                    # 严格匹配 1~2位数字 (如: "5", "05", "80")
+                    if re.match(r'^\d{1,2}$', txt):
+                        balls.append(int(txt))
+                    if len(balls) == len(d_cols):
+                        break
+                
+                # 万一全挤在一个格子里，动用强力正则保底
+                if len(balls) < len(d_cols):
+                    balls = []
+                    row_text = " ".join([td.get_text(separator=" ") for td in tds[start_idx:]])
+                    all_nums = re.findall(r'(?<!\d)\d{1,2}(?!\d)', row_text)
+                    balls = [int(n) for n in all_nums if 0 <= int(n) <= 80][:len(d_cols)]
+            # ====================================
             
-            rest_text = " ".join([td.get_text(separator=" ") for td in tds[1:]])
-            all_digits = [int(n) for n in re.findall(r'\d+', rest_text)]
-            balls = [n for n in all_digits if 0 <= n <= 81]
-            
-            if len(balls) >= len(d_cols):
-                balls = balls[:len(d_cols)]
+            if len(balls) == len(d_cols):
                 row = {q_col: issue_val}
                 for i, col_name in enumerate(d_cols):
                     row[col_name] = balls[i]
@@ -127,9 +164,13 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         if web_rows:
             web_df = pd.DataFrame(web_rows)
             
+            # 【终极防爆补丁】：保护数据合并时不报 int too large 错误
             def safe_format(val):
                 try:
-                    s = str(int(float(val)))
+                    s = str(val).strip()
+                    if '.' in s: s = s.split('.')[0]
+                    s = re.sub(r'\D', '', s)
+                    if not s or len(s) > 10: return 0  # 超过10位的巨型数据直接拦截归零！
                     return int("20" + s) if len(s) == 5 else int(s)
                 except: return 0
             
@@ -138,7 +179,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             updated = pd.concat([web_df, df], ignore_index=True)
             updated = updated.drop_duplicates(subset=[q_col], keep='first')
             updated = updated.sort_values(q_col, ascending=False)
-            updated = updated[updated[q_col] > 0]
+            updated = updated[updated[q_col] > 0] # 滤除被归零的乱码行
             
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated.to_csv(save_path, index=False, encoding='utf-8-sig')
@@ -148,11 +189,11 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             time.sleep(1.5)
             st.rerun()
         else:
-            status.error("❌ 抓取不到有效数据，请检查网络或网站结构是否再次改变。")
+            status.error("❌ 未找到有效数据，请稍后重试。")
             time.sleep(3)
             status.empty()
     except Exception as e:
-        status.error(f"❌ 同步失败: {str(e)}")
+        status.error(f"❌ 同步遇到异常: {str(e)}")
 
 # --- 4. 预测引擎 ---
 def get_prediction(choice):
