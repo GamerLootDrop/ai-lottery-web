@@ -14,14 +14,15 @@ st.markdown("""
     .hist-table { width: 100%; border-collapse: collapse; text-align: center; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 1rem; }
     .hist-table th { background-color: #f8f9fa; padding: 12px; border-bottom: 2px solid #eaeaea; color: #666; font-weight: bold; }
     .hist-table td { padding: 12px; border-bottom: 1px solid #f0f0f0; color: #333; font-size: 15px; }
-    .ball { display: inline-block; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; color: white; font-weight: bold; margin: 0 3px; font-size: 13px; text-align: center; }
+    .ball { display: inline-block; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; color: white; font-weight: bold; margin: 3px 3px; font-size: 13px; text-align: center; }
     .bg-red { background-color: #f14545; }
     .bg-blue { background-color: #3b71f7; }
     .bg-yellow { background-color: #f9bf15; color: #333 !important; }
     .bg-purple { background-color: #9c27b0; }
-    .pred-row { background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 15px; border-left: 5px solid #f14545; display: flex; align-items: center; }
+    /* 微调预测行的间距，让复制框紧紧贴在下面 */
+    .pred-row { background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 5px; border-left: 5px solid #f14545; display: flex; align-items: center; }
     .pred-title { width: 140px; font-weight: bold; color: #444; }
-    .pred-ball { display: inline-block; width: 34px; height: 34px; line-height: 34px; border-radius: 50%; color: white; font-weight: bold; margin: 0 4px; text-align: center; }
+    .pred-ball { display: inline-block; width: 34px; height: 34px; line-height: 34px; border-radius: 50%; color: white; font-weight: bold; margin: 3px 4px; text-align: center; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -67,7 +68,7 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 强制纠错式同步 (安全防错版) ---
+# --- 3. 强制纠错式同步 (双轨制安全版) ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     def normalize_issue(iss):
         try:
@@ -79,7 +80,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     api_map = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
     
     try:
-        status.info(f"📡 正在抓取 {choice} 最新数据...")
+        status.info(f"📡 正在突破拦截，抓取 {choice} 最新数据...")
         url = f"https://datachart.500.com/{api_map.get(choice, 'ssq')}/history/newinc/history.php?limit=50"
         
         headers = {
@@ -88,39 +89,60 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
+        
         tdata = soup.find('tbody', id='tdata')
+        trs = tdata.find_all('tr') if tdata else soup.find_all('tr')
         
         web_rows = []
-        if tdata:
-            for tr in tdata.find_all('tr'):
-                if 'hide' in tr.get('class', []): continue
-                tds = tr.find_all('td')
-                if len(tds) < 3: continue
-                
-                issue_val = normalize_issue(tds[0].text.strip())
-                if issue_val == 0: continue
-                
-                # 【核心修复】：增加 isdigit() 判断，安全过滤空字符串或非数字
-                balls = []
+        for tr in trs:
+            if 'hide' in tr.get('class', []): continue
+            tds = tr.find_all('td')
+            if len(tds) < 3: continue
+            
+            iss_text = tds[0].text.strip()
+            if not iss_text.isdigit(): continue
+            
+            issue_val = normalize_issue(iss_text)
+            if issue_val == 0: continue
+            
+            balls = []
+            
+            # 【双轨制逻辑分离】
+            if choice in ["双色球", "大乐透"]:
+                # 👉 老逻辑：针对 SSQ 和 DLT 完美生效的版本
                 for td in tr.find_all('td', class_=['t_cfont2', 't_cfont4']):
                     txt = td.text.strip()
-                    if txt.isdigit():  # 必须是纯数字才转换
+                    if txt.isdigit():
                         balls.append(int(txt))
-                
                 if not balls:
-                    balls = [int(td.text.strip()) for td in tds[1:] if td.text.strip().isdigit()][:len(d_cols)]
-                
-                if len(balls) >= len(d_cols):
-                    row = {q_col: issue_val}
-                    for i, col_name in enumerate(d_cols):
-                        row[col_name] = balls[i]
-                    web_rows.append(row)
+                    for td in tds[1:]:
+                        txt = td.text.strip()
+                        if txt.isdigit():
+                            balls.append(int(txt))
+                        if len(balls) == len(d_cols):
+                            break
+            else:
+                # 👉 新逻辑：暴力抓取法，适用于排列3、福彩3D等标签不一致的彩种
+                for td in tds[1:]:
+                    txt = td.text.strip()
+                    if txt.isdigit():
+                        val = int(txt)
+                        if 0 <= val <= 81:
+                            balls.append(val)
+                    if len(balls) == len(d_cols):
+                        break
+            
+            # 整合数据
+            if len(balls) == len(d_cols):
+                row = {q_col: issue_val}
+                for i, col_name in enumerate(d_cols):
+                    row[col_name] = balls[i]
+                web_rows.append(row)
 
         if web_rows:
             web_df = pd.DataFrame(web_rows)
             df[q_col] = df[q_col].apply(normalize_issue)
             
-            # 暴力合并纠错
             updated = pd.concat([web_df, df], ignore_index=True)
             updated = updated.drop_duplicates(subset=[q_col], keep='first')
             updated = updated.sort_values(q_col, ascending=False)
@@ -128,18 +150,18 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated.to_csv(save_path, index=False, encoding='utf-8-sig')
             
-            status.success(f"✅ 突破成功！已抓取并校准 {len(web_rows)} 期最新数据。")
+            status.success(f"✅ 突破成功！已为 {choice} 抓取并校准 {len(web_rows)} 期数据。")
             st.cache_data.clear()
             time.sleep(1.5)
             st.rerun()
         else:
-            status.error("❌ 网站暂无更新，或未能找到有效数字。")
+            status.error("❌ 网站暂无更新，或防爬规则变更。")
             time.sleep(2)
             status.empty()
     except Exception as e:
         status.error(f"❌ 同步失败: {str(e)}")
 
-# --- 4. 预测引擎 ---
+# --- 4. 预测引擎 (新增复制用纯文本) ---
 def get_prediction(choice):
     sets = []
     names = ["🔥 极热寻踪", "🧊 绝地反弹", "⚖️ 黄金均衡", "🎲 蒙特卡洛", "🧠 深度拟合"]
@@ -147,20 +169,28 @@ def get_prediction(choice):
         if choice == "双色球":
             r = sorted(random.sample(range(1, 34), 6)); b = random.randint(1, 16)
             html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r]) + f"<span class='pred-ball bg-blue'>{b:02d}</span>"
+            text_copy = " ".join([f"{n:02d}" for n in r]) + f" | {b:02d}"
         elif choice == "大乐透":
             r = sorted(random.sample(range(1, 36), 5)); b = sorted(random.sample(range(1, 13), 2))
             html = "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in r]) + "".join([f"<span class='pred-ball bg-yellow'>{n:02d}</span>" for n in b])
+            text_copy = " ".join([f"{n:02d}" for n in r]) + " | " + " ".join([f"{n:02d}" for n in b])
         elif choice == "快乐8":
             r = sorted(random.sample(range(1, 81), 20))
-            html = "".join([f"<span class='pred-ball bg-red' style='width:24px;height:24px;line-height:24px;font-size:11px;'>{n:02d}</span>" for n in r])
+            html = "".join([f"<span class='pred-ball bg-red' style='width:26px;height:26px;line-height:26px;font-size:12px;margin:2px;'>{n:02d}</span>" for n in r[:10]])
+            html += "<br>"
+            html += "".join([f"<span class='pred-ball bg-red' style='width:26px;height:26px;line-height:26px;font-size:12px;margin:2px;'>{n:02d}</span>" for n in r[10:]])
+            text_copy = " ".join([f"{n:02d}" for n in r])
         elif choice == "七星彩":
             r = [random.randint(0, 9) for _ in range(6)]; b = random.randint(0, 14)
             html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in r]) + f"<span class='pred-ball bg-yellow'>{b}</span>"
+            text_copy = " ".join([str(n) for n in r]) + f" | {b}"
         else:
             n_count = 3 if choice in ["排列3", "福彩3D"] else 5
             nums = [random.randint(0, 9) for _ in range(n_count)]
             html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in nums])
-        sets.append({"name": name, "html": html})
+            text_copy = " ".join([str(n) for n in nums])
+            
+        sets.append({"name": name, "html": html, "text": text_copy})
     return sets
 
 # --- 5. 界面 ---
@@ -176,7 +206,6 @@ if target:
     df, q_col, d_cols, needs_zero, actual_path = load_full_data(target, choice)
     if df is not None:
         
-        # ========== 显示选项面板 ==========
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 🗓️ 显示选项")
         view_options = {"近20期": 20, "近50期": 50, "近100期": 100, "近200期": 200, "显示全部": len(df)}
@@ -206,6 +235,10 @@ if target:
                     elif choice == "七星彩": bg = "bg-yellow" if i == 6 else "bg-purple"
                     elif choice in ["排列3", "排列5", "福彩3D"]: bg = "bg-purple"
                     balls_html += f"<span class='ball {bg}'>{txt}</span>"
+                    
+                    if choice == "快乐8" and i == 9:
+                        balls_html += "<br>"
+
                 table_html += f"<tr><td><b>{int(row[q_col])}</b></td><td>{balls_html}</td></tr>"
             st.markdown(table_html + "</table>", unsafe_allow_html=True)
             
@@ -217,6 +250,9 @@ if target:
         with t3:
             if st.button("🚀 启动 AI 深度演算"):
                 for p in get_prediction(choice):
+                    # 渲染漂亮的球
                     st.markdown(f"<div class='pred-row'><div class='pred-title'>{p['name']}</div><div>{p['html']}</div></div>", unsafe_allow_html=True)
+                    # 紧贴在下方输出可一键复制的纯文本代码框
+                    st.code(p['text'], language=None)
     else: st.error("数据解析失败。")
 else: st.error(f"未找到 {choice} 的数据文件。")
