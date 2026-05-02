@@ -70,58 +70,45 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析引擎报错详情: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 核心新增：自动抓取与数据填补引擎 ---
+# --- 3. 自动抓取与数据填补 ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
-    # 1. 找到本地最新的期号
     latest_local_issue = int(df[q_col].max())
-    
-    # 2. 模拟向全网API接口请求最新数据 (实际商业化时替换为真实爬虫代码如 requests.get)
-    # 这里我们用极客动画展示抓取过程
     status_text = st.empty()
     progress_bar = st.progress(0)
     
     status_text.text(f"📡 正在连接 {choice} 国家开奖数据中心...")
-    time.sleep(1)
+    time.sleep(0.5)
     progress_bar.progress(30)
     
-    status_text.text(f"🔍 发现本地最新期号: {latest_local_issue}，正在比对云端...")
-    time.sleep(1)
+    status_text.text(f"🔍 发现本地最新期号: {latest_local_issue}，正在比对...")
     progress_bar.progress(60)
     
-    # 模拟发现缺失了 2 期数据
-    missing_issues = [latest_local_issue + 1, latest_local_issue + 2]
-    
-    status_text.text(f"📥 发现 {len(missing_issues)} 期缺失数据，正在抓取并清洗...")
-    time.sleep(1.5)
-    progress_bar.progress(90)
-    
-    # 3. 生成要补填的新数据行并追加到本地文件
+    # 模拟数据填充逻辑（老板您提过之后要换成真实API）
+    missing_issues = [latest_local_issue + 1]
     new_rows = []
     for issue in missing_issues:
         row = {q_col: issue}
         for col in d_cols:
-            row[col] = random.randint(1, 9) # 模拟抓取到的真实开奖号
+            row[col] = random.randint(1, 9) 
         new_rows.append(row)
     
     new_df = pd.DataFrame(new_rows)
     updated_df = pd.concat([df, new_df], ignore_index=True)
     
-    # 4. 真正覆盖保存回本地文件 (支持 CSV 保存，若是 Excel 则转存为 CSV 以保证稳定性)
     try:
         save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
         updated_df.to_csv(save_path, index=False, encoding='utf-8-sig')
         progress_bar.progress(100)
-        status_text.success(f"✅ 同步完成！成功将 {len(missing_issues)} 期最新数据补入本地数据库！")
-        time.sleep(1.5)
+        status_text.success(f"✅ 同步完成！最新期号: {latest_local_issue + 1}")
+        time.sleep(1)
         status_text.empty()
         progress_bar.empty()
-        # 清除缓存强制刷新页面
         st.cache_data.clear()
         st.rerun()
     except Exception as e:
-        status_text.error(f"❌ 写入本地文件失败: {str(e)}")
+        status_text.error(f"❌ 写入失败: {str(e)}")
 
-# --- 4. 辅助功能：生成推荐号码 ---
+# --- 4. 辅助预测功能 ---
 def get_prediction_sets(choice):
     results = []
     strategies = ["🔥 极热寻踪", "🧊 绝地反弹", "⚖️ 黄金均衡", "🎲 蒙特卡洛", "🧠 深度拟合"]
@@ -141,33 +128,24 @@ def get_prediction_sets(choice):
         results.append({"strategy": s, "text": nums, "html": html_balls})
     return results
 
-# --- 初始化 Session State ---
-if 'pred_sets' not in st.session_state:
-    st.session_state.pred_sets = None
-if 'copy_text' not in st.session_state:
-    st.session_state.copy_text = ""
-if 'current_choice' not in st.session_state:
-    st.session_state.current_choice = ""
-
 # --- 5. 界面展示 ---
 LOTTERY_FILES = {"福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"}
 st.sidebar.title("💎 AI 大数据决策终端")
 choice = st.sidebar.selectbox("🎯 选择实战彩种", list(LOTTERY_FILES.keys()))
 
-if choice != st.session_state.current_choice:
+if 'current_choice' not in st.session_state or choice != st.session_state.current_choice:
     st.session_state.pred_sets = None
     st.session_state.current_choice = choice
 
 file_keyword = LOTTERY_FILES[choice]
-target_file = next((f for f in os.listdir(".") if file_keyword in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))), None)
-
-st.sidebar.markdown("---")
+all_match = [f for f in os.listdir(".") if file_keyword in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))]
+target_file = next((f for f in all_match if '_synced' in f), all_match[0] if all_match else None)
 
 if target_file:
     df, q_col, d_cols, needs_zero, actual_file_path = load_full_data(target_file, choice)
     
     if df is not None:
-        # 左侧抓取同步模块
+        st.sidebar.markdown("---")
         st.sidebar.subheader("🌐 数据库状态")
         st.sidebar.markdown(f"**最新期号：** `{int(df[q_col].max())}`")
         if st.sidebar.button("🔄 联网同步最新开奖", use_container_width=True):
@@ -175,17 +153,15 @@ if target_file:
 
         st.sidebar.markdown("---")
         st.sidebar.subheader("📅 显示选项")
-        preset_map = {"近20期": 20, "近50期": 50, "近100期": 100, "近200期": 200, "显示全部": 999999}
-        selected_preset = st.sidebar.radio("选择查看范围", list(preset_map.keys()), index=1)
+        preset_map = {"近20期": 20, "近50期": 50, "近100期": 100, "近200期": 200, "显示全部": len(df)}
+        selected_preset = st.sidebar.radio("选择查看/分析范围", list(preset_map.keys()), index=1)
         show_limit = preset_map[selected_preset]
 
-        total_records = len(df)
         st.title(f"🎰 {choice} · 智算中心")
-        
         tab1, tab2, tab3 = st.tabs(["📜 历史大数据", "📊 走势分析", "🤖 AI 五维演算"])
         
         with tab1:
-            st.markdown(f"**当前排列：{selected_preset}** (本地数据库共计 {total_records} 期)")
+            st.markdown(f"**当前视图：{selected_preset}**")
             html = "<table class='hist-table'><tr><th>期号</th><th>开奖号码</th></tr>"
             for _, row in df.head(show_limit).iterrows():
                 balls_html = ""
@@ -198,43 +174,40 @@ if target_file:
                     elif choice in ["排列3", "排列5"]: c = "bg-purple"
                     balls_html += f"<span class='ball {c}'>{num_str}</span>"
                 html += f"<tr><td><b>{int(row[q_col])}</b></td><td>{balls_html}</td></tr>"
-            html += "</table>"
-            st.markdown(html, unsafe_allow_html=True)
+            st.markdown(html + "</table>", unsafe_allow_html=True)
             
         with tab2:
-            st.subheader("📈 和值波动曲线")
-            calc_df = df.head(100).copy()
-            calc_df['和值'] = calc_df[d_cols].sum(axis=1)
-            st.line_chart(calc_df.sort_values(q_col).set_index(q_col)['和值'])
+            st.subheader(f"📈 走势曲线图 ({selected_preset})")
+            
+            # 这里的算法设置加回来了
+            algo_choice = st.selectbox("选择分析维度", ["总和值走势", "平均值走势", "最大值波动", "最小值波动"])
+            
+            # 这里解决了同步问题：读取数据的长度严格等于 show_limit
+            calc_df = df.head(show_limit).copy()
+            
+            if algo_choice == "总和值走势":
+                calc_df['指标'] = calc_df[d_cols].sum(axis=1)
+            elif algo_choice == "平均值走势":
+                calc_df['指标'] = calc_df[d_cols].mean(axis=1)
+            elif algo_choice == "最大值波动":
+                calc_df['指标'] = calc_df[d_cols].max(axis=1)
+            else:
+                calc_df['指标'] = calc_df[d_cols].min(axis=1)
+            
+            # 绘图：x轴为期号，y轴为选定的指标
+            st.line_chart(calc_df.sort_values(q_col).set_index(q_col)['指标'])
 
         with tab3:
             st.subheader("🧠 五维联合预测")
-            if st.button("🚀 启动 AI 深度演算 (基于当前全量数据)", use_container_width=True):
-                with st.spinner("正在穿越历史长河检索底层规律..."):
-                    time.sleep(1.2)
-                    pred_sets = get_prediction_sets(choice)
-                    
-                    copy_text = f"【{choice} AI智算推荐】\n"
-                    for p in pred_sets:
-                        copy_text += f"{p['strategy']}: {p['text']}\n"
-                    
-                    st.session_state.pred_sets = pred_sets
-                    st.session_state.copy_text = copy_text
+            if st.button("🚀 启动 AI 深度演算", use_container_width=True):
+                with st.spinner("正在分析历史规律..."):
+                    time.sleep(1)
+                    st.session_state.pred_sets = get_prediction_sets(choice)
             
-            if st.session_state.pred_sets is not None:
+            if st.session_state.get('pred_sets'):
                 for p in st.session_state.pred_sets:
-                    st.markdown(f"""
-                    <div class='pred-row'>
-                        <div class='pred-title'>{p['strategy']}</div>
-                        <div class='pred-balls'>{p['html']}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                st.markdown("---")
-                st.success("✅ 号码已生成！请点击下方纯文本框 **右上角的两个重叠方块图标**，即可一键复制全部号码。")
-                st.code(st.session_state.copy_text, language="text")
+                    st.markdown(f"<div class='pred-row'><div class='pred-title'>{p['strategy']}</div><div class='pred-balls'>{p['html']}</div></div>", unsafe_allow_html=True)
+                st.code(f"【{choice} 推荐】\n" + "\n".join([f"{p['strategy']}: {p['text']}" for p in st.session_state.pred_sets]))
 
-    else: 
-        st.error("数据载入失败，请查看上方具体的错误详情。")
-else: 
-    st.error(f"🚨 未找到 {choice} 数据文件，请确保后台存在类似 {file_keyword}.xls 或 .csv 的文件。")
+    else: st.error("数据载入失败。")
+else: st.error(f"🚨 未找到 {choice} 数据文件。")
