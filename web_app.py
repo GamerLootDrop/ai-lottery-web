@@ -25,57 +25,55 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 增强型自适应数据提取引擎 ---
+# --- 2. 纯数据扫描提取引擎 ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
-        # 尝试读取，处理可能的表头偏移
         raw_df = pd.read_excel(file_path) if file_path.endswith('.xls') else pd.read_csv(file_path)
         if raw_df.empty: return None, None, None, None, None
         
-        # 寻找包含“期”字的期号列
-        q_col = None
-        for col in raw_df.columns:
-            if '期' in str(col) or 'NO' in str(col).upper():
-                q_col = col
-                break
+        raw_df.columns = [str(c).strip() for c in raw_df.columns]
         
-        # 如果没找到，可能表头在第二行，尝试重新读取
-        if q_col is None:
+        q_col = next((c for c in raw_df.columns if '期' in c or 'NO' in c.upper()), None)
+        if not q_col:
             raw_df = pd.read_excel(file_path, skiprows=1) if file_path.endswith('.xls') else pd.read_csv(file_path, skiprows=1)
-            for col in raw_df.columns:
-                if '期' in str(col) or 'NO' in str(col).upper():
-                    q_col = col
-                    break
-        
-        if q_col is None: q_col = raw_df.columns[0] # 保底选择第一列
+            raw_df.columns = [str(c).strip() for c in raw_df.columns]
+            q_col = next((c for c in raw_df.columns if '期' in c or 'NO' in c.upper()), raw_df.columns[0])
+            
+        raw_df[q_col] = pd.to_numeric(raw_df[q_col], errors='coerce')
+        raw_df = raw_df.dropna(subset=[q_col])
 
-        # 清洗干扰列，精准定位“球号列”
-        exclude_keywords = ['日', '周', '时', '售', '额', '奖', '余', '池', '等', '加', '倍', '总']
-        ball_cols = []
-        for col in raw_df.columns:
-            col_str = str(col)
-            # 排除期号列本身和包含干扰词的列
-            if col_str == str(q_col) or any(k in col_str for k in exclude_keywords):
-                continue
-            # 检查该列前几个有效数据是否为数字且在合理范围内（0-80）
-            sample = raw_df[col].dropna().head(5)
-            try:
-                if not sample.empty and all(0 <= float(x) <= 80 for x in sample):
-                    ball_cols.append(col)
-            except: continue
-
-        # 根据彩种强制约束列数，防止抓多
         limits = {"双色球": 7, "大乐透": 7, "福彩3D": 3, "快乐8": 20, "排列3": 3, "排列5": 5, "七星彩": 7}
         max_balls = limits.get(choice, 7)
-        ball_cols = ball_cols[:max_balls]
+        
+        q_idx = raw_df.columns.get_loc(q_col)
+        ball_cols = []
+        for i in range(q_idx + 1, len(raw_df.columns)):
+            col = raw_df.columns[i]
+            sample = raw_df[col].dropna().head(10) 
+            if sample.empty: continue
+            
+            is_ball_col = True
+            for val in sample:
+                try:
+                    num = float(str(val).replace(',', ''))
+                    if num < 0 or num > 100:
+                        is_ball_col = False
+                        break
+                except ValueError:
+                    is_ball_col = False
+                    break
+                    
+            if is_ball_col:
+                ball_cols.append(col)
+                
+            if len(ball_cols) == max_balls:
+                break
 
-        # 最终清洗数据
-        clean_df = raw_df[[q_col] + ball_cols].dropna(subset=[q_col]).copy()
+        clean_df = raw_df[[q_col] + ball_cols].copy()
         new_names = [q_col] + [f"b_{i+1}" for i in range(len(ball_cols))]
         clean_df.columns = new_names
         
-        # 强制转换为整型
         for c in new_names:
             clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce').fillna(0).astype(int)
             
@@ -85,7 +83,7 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析本地文件失败: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 智能全彩种穿透抓取 ---
+# --- 3. 智能全彩种穿透同步 ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     def normalize_issue(iss):
         s = str(iss).strip()
@@ -95,12 +93,11 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
     bar = st.progress(0)
     
-    # 500网彩种ID映射
     api_map = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
     
     try:
         status.info(f"📡 正在接入 {choice} 穿透通道...")
-        url = f"https://datachart.500.com/{api_map.get(choice, 'ssq')}/history/newinc/history.php?limit=20"
+        url = f"https://datachart.500.com/{api_map.get(choice, 'ssq')}/history/newinc/history.php?limit=30"
         res = requests.get(url, timeout=10)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
@@ -115,9 +112,8 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
                 
                 issue_7d = normalize_issue(tds[0].text.strip())
                 if issue_7d > latest_local:
-                    # 抓取逻辑：优先抓红蓝球 class，没有则抓全部 td 数字
                     balls = [int(td.text.strip()) for td in tr.find_all('td', class_=['t_cfont2', 't_cfont4'])]
-                    if not balls: # 针对某些彩种没有特殊 class 的情况
+                    if not balls:
                         balls = [int(td.text.strip()) for td in tds[1:] if td.text.strip().isdigit()][:len(d_cols)]
                     
                     row = {q_col: issue_7d}
@@ -127,8 +123,10 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         
         if new_rows:
             new_df = pd.DataFrame(new_rows)
-            updated = pd.concat([new_df, df], ignore_index=True).sort_values(q_col, ascending=False)
+            updated = pd.concat([new_df, df], ignore_index=True).drop_duplicates(subset=[q_col], keep='last')
+            updated = updated.sort_values(q_col, ascending=False)
             updated[q_col] = updated[q_col].astype(int)
+            
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated.to_csv(save_path, index=False, encoding='utf-8-sig')
             status.success(f"✅ 成功同步 {len(new_rows)} 期新数据！")
@@ -136,7 +134,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             time.sleep(1)
             st.rerun()
         else:
-            status.success("✅ 已是最新数据")
+            status.success("✅ 当前已是最新数据！")
             time.sleep(1)
     except Exception as e:
         status.error(f"❌ 同步失败: {str(e)}")
@@ -158,8 +156,12 @@ def get_prediction(choice):
         elif choice == "快乐8":
             r = sorted(random.sample(range(1, 81), 20))
             html = "".join([f"<span class='pred-ball bg-red' style='width:28px;height:28px;line-height:28px;font-size:12px;'>{n:02d}</span>" for n in r])
+        elif choice == "七星彩":
+            r = [random.randint(0, 9) for _ in range(6)]; b = random.randint(0, 14)
+            # 修复：6个紫球 + 1个金球
+            html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in r]) + f"<span class='pred-ball bg-yellow'>{b}</span>"
         else:
-            n_count = 3 if choice in ["排列3", "福彩3D"] else (5 if choice == "排列5" else 7)
+            n_count = 3 if choice in ["排列3", "福彩3D"] else 5
             nums = [random.randint(0, 9) for _ in range(n_count)]
             html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in nums])
         sets.append({"name": name, "html": html})
@@ -193,9 +195,13 @@ if target:
                     val = row[col]
                     txt = f"{val:02d}" if needs_zero else str(val)
                     bg = "bg-red"
-                    if choice == "双色球": bg = "bg-blue" if i==6 else "bg-red"
-                    elif choice == "大乐透": bg = "bg-yellow" if i>=5 else "bg-blue"
+                    
+                    if choice == "双色球": bg = "bg-blue" if i == 6 else "bg-red"
+                    elif choice == "大乐透": bg = "bg-yellow" if i >= 5 else "bg-blue"
+                    # 修复：前6个是紫色，第7个是金色
+                    elif choice == "七星彩": bg = "bg-yellow" if i == 6 else "bg-purple"
                     elif choice in ["排列3", "排列5", "福彩3D"]: bg = "bg-purple"
+                    
                     balls_html += f"<span class='ball {bg}'>{txt}</span>"
                 table_html += f"<tr><td><b>{int(row[q_col])}</b></td><td>{balls_html}</td></tr>"
             st.markdown(table_html + "</table>", unsafe_allow_html=True)
@@ -204,7 +210,6 @@ if target:
             calc_df = df.head(100).copy()
             calc_df['和值'] = calc_df[d_cols].sum(axis=1)
             st.line_chart(calc_df.sort_values(q_col).set_index(q_col)['和值'])
-            st.caption("上方图表显示最近 100 期开奖号码的和值波动趋势")
 
         with t3:
             if st.button("🚀 启动 AI 深度演算"):
