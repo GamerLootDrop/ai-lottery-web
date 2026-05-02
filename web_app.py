@@ -5,9 +5,9 @@ import time
 import random
 import requests
 from bs4 import BeautifulSoup
-import re  # 新增正则库，用于终极暴力提取
+import re  # 必备的正则库
 
-# --- 1. 深度定制样式表 ---
+# --- 1. 深度定制样式表 (保持之前调好的完美界面) ---
 st.set_page_config(page_title="AI 大数据决策终端", layout="wide")
 st.markdown("""
     <style>
@@ -26,7 +26,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 自适应数据提取 ---
+# --- 2. 自适应数据提取 (原封不动) ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -68,7 +68,7 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 同步最新数据 (双轨制安全+正则提取版) ---
+# --- 3. 同步最新数据 (融合了最新无敌正则降维打击版) ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
     api_map = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
@@ -78,7 +78,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         url = f"https://datachart.500.com/{api_map.get(choice, 'ssq')}/history/newinc/history.php?limit=50"
         
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = 'utf-8'
@@ -89,44 +89,29 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         
         web_rows = []
         for tr in trs:
-            if 'hide' in tr.get('class', []): continue
             tds = tr.find_all('td')
-            if len(tds) < 3: continue
+            # 容错：如果列数太少，直接跳过，防止报错
+            if len(tds) < len(d_cols) + 1: continue 
             
-            # 1. 安全提取期号 (只提取连续数字)
-            iss_text = tds[0].get_text(strip=True)
-            iss_match = re.search(r'\d{3,}', iss_text)
-            if not iss_match: continue
+            # 1. 暴力提取期号，剔除所有乱七八糟的字符，杜绝 int() 报错
+            iss_raw = tds[0].get_text(strip=True)
+            iss_str = re.sub(r'\D', '', iss_raw)
+            if len(iss_str) < 3: continue
             
-            raw_iss = iss_match.group()
-            issue_val = int("20" + raw_iss) if len(raw_iss) == 5 else int(raw_iss)
+            issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
             if issue_val == 0: continue
             
-            balls = []
+            # 2. 暴力提取所有数字，无视后面的中文、和值、隐藏列
+            rest_text = " ".join([td.get_text(separator=" ") for td in tds[1:]])
+            all_digits = [int(n) for n in re.findall(r'\d+', rest_text)]
             
-            # 【双轨制逻辑分离】
-            if choice in ["双色球", "大乐透"]:
-                # 👉 老逻辑：针对 SSQ 和 DLT 完美生效的版本
-                for td in tr.find_all('td', class_=['t_cfont2', 't_cfont4']):
-                    txt = td.get_text(strip=True)
-                    if re.match(r'^\d+$', txt): # 防止空字符串报错
-                        balls.append(int(txt))
-                if not balls:
-                    for td in tds[1:]:
-                        txt = td.get_text(strip=True)
-                        if re.match(r'^\d+$', txt):
-                            balls.append(int(txt))
-                        if len(balls) == len(d_cols):
-                            break
-            else:
-                # 👉 新逻辑：终极正则提取，无视网页排版，抽出所有数字
-                row_text = " ".join([td.get_text(separator=" ") for td in tds[1:]])
-                # 匹配所有独立数字
-                nums = [int(n) for n in re.findall(r'\b\d+\b', row_text)]
-                balls = [n for n in nums if 0 <= n <= 81][:len(d_cols)]
+            # 过滤出 0-81 范围内的常规开奖号码
+            balls = [n for n in all_digits if 0 <= n <= 81]
             
-            # 整合数据
-            if len(balls) == len(d_cols):
+            # 3. 严格按照当前彩种需要的号码数量进行截断
+            if len(balls) >= len(d_cols):
+                balls = balls[:len(d_cols)] # 例如只要前7个，后面多出来的扔掉
+                
                 row = {q_col: issue_val}
                 for i, col_name in enumerate(d_cols):
                     row[col_name] = balls[i]
@@ -157,13 +142,13 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             time.sleep(1.5)
             st.rerun()
         else:
-            status.error("❌ 网站暂无更新，或防爬规则变更。")
+            status.error("❌ 网站暂无更新，或被防爬规则拦截。")
             time.sleep(2)
             status.empty()
     except Exception as e:
         status.error(f"❌ 同步失败: {str(e)}")
 
-# --- 4. 预测引擎 ---
+# --- 4. 预测引擎 (原封不动) ---
 def get_prediction(choice):
     sets = []
     names = ["🔥 极热寻踪", "🧊 绝地反弹", "⚖️ 黄金均衡", "🎲 蒙特卡洛", "🧠 深度拟合"]
@@ -195,7 +180,7 @@ def get_prediction(choice):
         sets.append({"name": name, "html": html, "text": text_copy})
     return sets
 
-# --- 5. 界面 ---
+# --- 5. 界面框架 (原封不动) ---
 LOTTERY_FILES = {"福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"}
 st.sidebar.title("💎 AI 大数据决策终端")
 choice = st.sidebar.selectbox("🎯 选择实战彩种", list(LOTTERY_FILES.keys()))
@@ -217,7 +202,7 @@ if target:
         st.sidebar.markdown("---")
         st.sidebar.markdown(f"**最新期号：** `{int(df[q_col].max())}`")
         
-        # 按钮名字改回正常版
+        # 顺眼的更新按钮
         if st.sidebar.button("🔄 联网同步最新开奖", use_container_width=True):
             sync_latest_data(df, q_col, d_cols, choice, actual_path)
 
