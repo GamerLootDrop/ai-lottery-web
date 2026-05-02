@@ -5,9 +5,9 @@ import time
 import random
 import requests
 from bs4 import BeautifulSoup
-import re
+import re  # 必备的正则库
 
-# --- 1. 深度定制样式表 ---
+# --- 1. 深度定制样式表 (保持之前调好的完美界面) ---
 st.set_page_config(page_title="AI 大数据决策终端", layout="wide")
 st.markdown("""
     <style>
@@ -26,7 +26,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 自适应数据提取 ---
+# --- 2. 自适应数据提取 (原封不动) ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -68,28 +68,14 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 终极同步数据引擎 (修复了不同彩种网址不同的致命Bug) ---
+# --- 3. 同步最新数据 (融合了最新无敌正则降维打击版) ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
-    
-    # 核心修复点：为每个彩种指定精准的抓取网址 (区分 newinc 和 inc)
-    url_map = {
-        "双色球": "https://datachart.500.com/ssq/history/newinc/history.php?limit=50",
-        "大乐透": "https://datachart.500.com/dlt/history/newinc/history.php?limit=50",
-        "福彩3D": "https://datachart.500.com/sd/history/inc/history.php?limit=50",
-        "排列3": "https://datachart.500.com/pls/history/inc/history.php?limit=50",
-        "排列5": "https://datachart.500.com/plw/history/inc/history.php?limit=50",
-        "七星彩": "https://datachart.500.com/qxc/history/inc/history.php?limit=50",
-        "快乐8": "https://datachart.500.com/kl8/history/inc/history.php?limit=50"
-    }
+    api_map = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
     
     try:
-        url = url_map.get(choice)
-        if not url:
-            status.error(f"❌ 暂不支持 {choice} 的自动同步")
-            return
-
-        status.info(f"📡 正在连接 {choice} 专属数据源...")
+        status.info(f"📡 正在联网获取 {choice} 最新开奖数据...")
+        url = f"https://datachart.500.com/{api_map.get(choice, 'ssq')}/history/newinc/history.php?limit=50"
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -104,8 +90,10 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         web_rows = []
         for tr in trs:
             tds = tr.find_all('td')
+            # 容错：如果列数太少，直接跳过，防止报错
             if len(tds) < len(d_cols) + 1: continue 
             
+            # 1. 暴力提取期号，剔除所有乱七八糟的字符，杜绝 int() 报错
             iss_raw = tds[0].get_text(strip=True)
             iss_str = re.sub(r'\D', '', iss_raw)
             if len(iss_str) < 3: continue
@@ -113,12 +101,17 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
             if issue_val == 0: continue
             
+            # 2. 暴力提取所有数字，无视后面的中文、和值、隐藏列
             rest_text = " ".join([td.get_text(separator=" ") for td in tds[1:]])
             all_digits = [int(n) for n in re.findall(r'\d+', rest_text)]
+            
+            # 过滤出 0-81 范围内的常规开奖号码
             balls = [n for n in all_digits if 0 <= n <= 81]
             
+            # 3. 严格按照当前彩种需要的号码数量进行截断
             if len(balls) >= len(d_cols):
-                balls = balls[:len(d_cols)]
+                balls = balls[:len(d_cols)] # 例如只要前7个，后面多出来的扔掉
+                
                 row = {q_col: issue_val}
                 for i, col_name in enumerate(d_cols):
                     row[col_name] = balls[i]
@@ -127,6 +120,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         if web_rows:
             web_df = pd.DataFrame(web_rows)
             
+            # 统一本地数据期号格式，防报错
             def safe_format(val):
                 try:
                     s = str(int(float(val)))
@@ -138,7 +132,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             updated = pd.concat([web_df, df], ignore_index=True)
             updated = updated.drop_duplicates(subset=[q_col], keep='first')
             updated = updated.sort_values(q_col, ascending=False)
-            updated = updated[updated[q_col] > 0]
+            updated = updated[updated[q_col] > 0] # 滤除错误期号
             
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated.to_csv(save_path, index=False, encoding='utf-8-sig')
@@ -148,13 +142,13 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
             time.sleep(1.5)
             st.rerun()
         else:
-            status.error("❌ 抓取不到有效数据，请检查网络或网站结构是否再次改变。")
-            time.sleep(3)
+            status.error("❌ 网站暂无更新，或被防爬规则拦截。")
+            time.sleep(2)
             status.empty()
     except Exception as e:
         status.error(f"❌ 同步失败: {str(e)}")
 
-# --- 4. 预测引擎 ---
+# --- 4. 预测引擎 (原封不动) ---
 def get_prediction(choice):
     sets = []
     names = ["🔥 极热寻踪", "🧊 绝地反弹", "⚖️ 黄金均衡", "🎲 蒙特卡洛", "🧠 深度拟合"]
@@ -186,7 +180,7 @@ def get_prediction(choice):
         sets.append({"name": name, "html": html, "text": text_copy})
     return sets
 
-# --- 5. 界面框架 ---
+# --- 5. 界面框架 (原封不动) ---
 LOTTERY_FILES = {"福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"}
 st.sidebar.title("💎 AI 大数据决策终端")
 choice = st.sidebar.selectbox("🎯 选择实战彩种", list(LOTTERY_FILES.keys()))
@@ -208,6 +202,7 @@ if target:
         st.sidebar.markdown("---")
         st.sidebar.markdown(f"**最新期号：** `{int(df[q_col].max())}`")
         
+        # 顺眼的更新按钮
         if st.sidebar.button("🔄 联网同步最新开奖", use_container_width=True):
             sync_latest_data(df, q_col, d_cols, choice, actual_path)
 
