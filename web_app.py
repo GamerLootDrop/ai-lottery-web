@@ -26,7 +26,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 自适应数据提取 (✅ 已完全回退至最稳定、不挑文件的读取逻辑) ---
+# --- 2. 自适应数据提取 ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -34,8 +34,15 @@ def load_full_data(file_path, choice):
         if raw_df.empty: return None, None, None, None, None
         raw_df.columns = [str(c).strip() for c in raw_df.columns]
         
-        q_col = next((c for c in raw_df.columns if '期' in c or 'NO' in c.upper()), raw_df.columns[0])
-        
+        q_col = next((c for c in raw_df.columns if '期' in c or 'NO' in c.upper()), None)
+        if not q_col:
+            raw_df = pd.read_excel(file_path, skiprows=1) if file_path.endswith('.xls') else pd.read_csv(file_path, skiprows=1)
+            raw_df.columns = [str(c).strip() for c in raw_df.columns]
+            q_col = next((c for c in raw_df.columns if '期' in c or 'NO' in c.upper()), raw_df.columns[0])
+            
+        raw_df[q_col] = pd.to_numeric(raw_df[q_col], errors='coerce')
+        raw_df = raw_df.dropna(subset=[q_col])
+
         limits = {"双色球": 7, "大乐透": 7, "福彩3D": 3, "快乐8": 20, "排列3": 3, "排列5": 5, "七星彩": 7}
         max_balls = limits.get(choice, 7)
         
@@ -43,9 +50,8 @@ def load_full_data(file_path, choice):
         ball_cols = []
         for i in range(q_idx + 1, len(raw_df.columns)):
             col = raw_df.columns[i]
-            # 恢复最原始的判断：只要列里面是数字就行，不再强行限制大小导致本地数据被跳过
             nums = pd.to_numeric(raw_df[col], errors='coerce').dropna()
-            if not nums.empty:
+            if not nums.empty and (nums <= 81).all():
                 ball_cols.append(col)
             if len(ball_cols) == max_balls: break
 
@@ -54,7 +60,7 @@ def load_full_data(file_path, choice):
         clean_df.columns = new_names
         
         for c in new_names:
-            clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce').fillna(0)
+            clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce').fillna(0).astype(int)
             
         needs_zero = True if choice in ["双色球", "大乐透", "快乐8"] else False
         return clean_df.sort_values(q_col, ascending=False), q_col, new_names[1:], needs_zero, file_path
@@ -62,9 +68,11 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 终极同步引擎 (✅ 纯净正则降维打击，无视网页排版) ---
+# --- 3. 终极同步数据引擎 (修复了不同彩种网址不同的致命Bug) ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
+    
+    # 核心修复点：为每个彩种指定精准的抓取网址 (区分 newinc 和 inc)
     url_map = {
         "双色球": "https://datachart.500.com/ssq/history/newinc/history.php?limit=50",
         "大乐透": "https://datachart.500.com/dlt/history/newinc/history.php?limit=50",
@@ -77,161 +85,171 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     
     try:
         url = url_map.get(choice)
-        status.info(f"📡 正在拉取 {choice} 最新数据...")
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        if not url:
+            status.error(f"❌ 暂不支持 {choice} 的自动同步")
+            return
+
+        status.info(f"📡 正在连接 {choice} 专属数据源...")
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        res = requests.get(url, headers=headers, timeout=10)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        trs = soup.find('tbody', id='tdata').find_all('tr') if soup.find('tbody', id='tdata') else soup.find_all('tr')
-        web_rows = []
+        tdata = soup.find('tbody', id='tdata')
+        trs = tdata.find_all('tr') if tdata else soup.find_all('tr')
         
+        web_rows = []
         for tr in trs:
             tds = tr.find_all('td')
-            if len(tds) < 4: continue
+            if len(tds) < len(d_cols) + 1: continue 
             
-            # 1. 寻找当行真实的期号
-            issue_val = 0
-            start_idx = 1
-            for idx, td in enumerate(tds):
-                txt = td.get_text(strip=True)
-                digits = re.sub(r'\D', '', txt)
-                if 3 <= len(digits) <= 8 and int(digits) > 100:
-                    issue_val = int("20" + digits) if len(digits) == 5 else int(digits)
-                    start_idx = idx + 1
-                    break
+            iss_raw = tds[0].get_text(strip=True)
+            iss_str = re.sub(r'\D', '', iss_raw)
+            if len(iss_str) < 3: continue
             
+            issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
             if issue_val == 0: continue
-
-            # 2. 抓取球号（不同彩种分而治之）
-            balls = []
             
-            if choice in ["双色球", "大乐透"]:
-                # 您的金标准：原封不动
-                for td in tr.find_all('td', class_=['t_cfont2', 't_cfont4']):
-                    v = re.sub(r'\D', '', td.get_text(strip=True))
-                    if v: balls.append(int(v))
-            else:
-                # 把剩下的所有内容变成纯文本
-                rest_text = " ".join([td.get_text(separator=' ') for td in tds[start_idx:]])
-                
-                if choice == "快乐8":
-                    # 只找 1~2位 且在 1-80 范围内的数字
-                    nums = re.findall(r'(?<!\d)\d{1,2}(?!\d)', rest_text)
-                    balls = [int(n) for n in nums if 1 <= int(n) <= 80][:20]
-                else:
-                    # 3D、P3、P5、七星彩：只找“落单的” 1 位纯数字 (直接免疫和值 100 等干扰)
-                    nums = re.findall(r'(?<!\d)\d(?!\d)', rest_text)
-                    balls = [int(n) for n in nums][:len(d_cols)]
+            rest_text = " ".join([td.get_text(separator=" ") for td in tds[1:]])
+            all_digits = [int(n) for n in re.findall(r'\d+', rest_text)]
+            balls = [n for n in all_digits if 0 <= n <= 81]
             
-            # 如果抓齐了，就塞进表里
-            if len(balls) == len(d_cols):
+            if len(balls) >= len(d_cols):
+                balls = balls[:len(d_cols)]
                 row = {q_col: issue_val}
-                for i, col_name in enumerate(d_cols): row[col_name] = balls[i]
+                for i, col_name in enumerate(d_cols):
+                    row[col_name] = balls[i]
                 web_rows.append(row)
 
         if web_rows:
             web_df = pd.DataFrame(web_rows)
-            # 安全防爆转码
-            def fmt_q(v):
-                try:
-                    s = re.sub(r'\D', '', str(v).split('.')[0])
-                    return int(s) if s and len(s) < 10 else 0
-                except: return 0
-            df[q_col] = df[q_col].apply(fmt_q)
             
-            # 把网上的正确数据放前面合并，利用 drop_duplicates 自动清洗掉之前损坏的零值
+            def safe_format(val):
+                try:
+                    s = str(int(float(val)))
+                    return int("20" + s) if len(s) == 5 else int(s)
+                except: return 0
+            
+            df[q_col] = df[q_col].apply(safe_format)
+            
             updated = pd.concat([web_df, df], ignore_index=True)
             updated = updated.drop_duplicates(subset=[q_col], keep='first')
-            updated = updated[updated[q_col] > 0].sort_values(q_col, ascending=False)
+            updated = updated.sort_values(q_col, ascending=False)
+            updated = updated[updated[q_col] > 0]
             
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated.to_csv(save_path, index=False, encoding='utf-8-sig')
             
-            status.success(f"✅ {choice} 同步完成！更新/修复了 {len(web_rows)} 期数据。")
+            status.success(f"✅ 同步成功！已为 {choice} 更新 {len(web_rows)} 期数据。")
             st.cache_data.clear()
             time.sleep(1.5)
             st.rerun()
         else:
-            status.error("❌ 页面结构解析失败，未找到对应号码。")
-            time.sleep(2); status.empty()
+            status.error("❌ 抓取不到有效数据，请检查网络或网站结构是否再次改变。")
+            time.sleep(3)
+            status.empty()
     except Exception as e:
-        status.error(f"❌ 异常: {str(e)}")
+        status.error(f"❌ 同步失败: {str(e)}")
 
 # --- 4. 预测引擎 ---
 def get_prediction(choice):
     sets = []
-    for name in ["🔥 极热寻踪", "🧊 绝地反弹", "⚖️ 黄金均衡", "🎲 蒙特卡洛", "🧠 深度拟合"]:
+    names = ["🔥 极热寻踪", "🧊 绝地反弹", "⚖️ 黄金均衡", "🎲 蒙特卡洛", "🧠 深度拟合"]
+    for name in names:
         if choice == "双色球":
-            r, b = sorted(random.sample(range(1, 34), 6)), random.randint(1, 16)
+            r = sorted(random.sample(range(1, 34), 6)); b = random.randint(1, 16)
             html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r]) + f"<span class='pred-ball bg-blue'>{b:02d}</span>"
-            txt = " ".join([f"{n:02d}" for n in r]) + f" | {b:02d}"
+            text_copy = " ".join([f"{n:02d}" for n in r]) + f" | {b:02d}"
         elif choice == "大乐透":
-            r, b = sorted(random.sample(range(1, 36), 5)), sorted(random.sample(range(1, 13), 2))
+            r = sorted(random.sample(range(1, 36), 5)); b = sorted(random.sample(range(1, 13), 2))
             html = "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in r]) + "".join([f"<span class='pred-ball bg-yellow'>{n:02d}</span>" for n in b])
-            txt = " ".join([f"{n:02d}" for n in r]) + " | " + " ".join([f"{n:02d}" for n in b])
+            text_copy = " ".join([f"{n:02d}" for n in r]) + " | " + " ".join([f"{n:02d}" for n in b])
         elif choice == "快乐8":
             r = sorted(random.sample(range(1, 81), 20))
-            html = "".join([f"<span class='pred-ball bg-red' style='width:24px;height:24px;line-height:24px;font-size:11px;margin:1px;'>{n:02d}</span>" for n in r])
-            txt = " ".join([f"{n:02d}" for n in r])
+            html = "".join([f"<span class='pred-ball bg-red' style='width:26px;height:26px;line-height:26px;font-size:12px;margin:2px;'>{n:02d}</span>" for n in r[:10]])
+            html += "<br>"
+            html += "".join([f"<span class='pred-ball bg-red' style='width:26px;height:26px;line-height:26px;font-size:12px;margin:2px;'>{n:02d}</span>" for n in r[10:]])
+            text_copy = " ".join([f"{n:02d}" for n in r])
+        elif choice == "七星彩":
+            r = [random.randint(0, 9) for _ in range(6)]; b = random.randint(0, 14)
+            html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in r]) + f"<span class='pred-ball bg-yellow'>{b}</span>"
+            text_copy = " ".join([str(n) for n in r]) + f" | {b}"
         else:
-            n_count = {"福彩3D":3, "排列3":3, "排列5":5, "七星彩":7}.get(choice, 3)
-            res = [random.randint(0, 9) for _ in range(n_count)]
-            html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in res])
-            txt = " ".join([str(n) for n in res])
-        sets.append({"name": name, "html": html, "text": txt})
+            n_count = 3 if choice in ["排列3", "福彩3D"] else 5
+            nums = [random.randint(0, 9) for _ in range(n_count)]
+            html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in nums])
+            text_copy = " ".join([str(n) for n in nums])
+            
+        sets.append({"name": name, "html": html, "text": text_copy})
     return sets
 
-# --- 5. 主逻辑 ---
+# --- 5. 界面框架 ---
 LOTTERY_FILES = {"福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"}
-st.sidebar.title("💎 AI 决策终端")
-choice = st.sidebar.selectbox("🎯 实战彩种", list(LOTTERY_FILES.keys()))
+st.sidebar.title("💎 AI 大数据决策终端")
+choice = st.sidebar.selectbox("🎯 选择实战彩种", list(LOTTERY_FILES.keys()))
 
-all_f = [f for f in os.listdir(".") if LOTTERY_FILES[choice] in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))]
-target = next((f for f in all_f if '_synced' in f), all_f[0] if all_f else None)
+file_kw = LOTTERY_FILES[choice]
+all_files = [f for f in os.listdir(".") if file_kw in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))]
+target = next((f for f in all_files if '_synced' in f), all_files[0] if all_files else None)
 
 if target:
     df, q_col, d_cols, needs_zero, actual_path = load_full_data(target, choice)
     if df is not None:
-        st.sidebar.button("🔄 联网同步最新开奖", on_click=sync_latest_data, args=(df, q_col, d_cols, choice, actual_path), use_container_width=True)
         
-        st.title(f"🎰 {choice}")
-        t1, t2, t3 = st.tabs(["📜 历史数据", "📊 分析", "🤖 AI 演算"])
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 🗓️ 显示选项")
+        view_options = {"近20期": 20, "近50期": 50, "近100期": 100, "近200期": 200, "显示全部": len(df)}
+        view_choice = st.sidebar.radio("选择查看/分析范围", list(view_options.keys()), index=1)
+        view_limit = view_options[view_choice]
+
+        st.sidebar.markdown("---")
+        st.sidebar.markdown(f"**最新期号：** `{int(df[q_col].max())}`")
+        
+        if st.sidebar.button("🔄 联网同步最新开奖", use_container_width=True):
+            sync_latest_data(df, q_col, d_cols, choice, actual_path)
+
+        st.title(f"🎰 {choice} · 智算中心")
+        t1, t2, t3 = st.tabs(["📜 历史数据", "📊 走势分析", "🤖 AI 演算"])
+        
         with t1:
-            limit = st.slider("查看期数", 10, len(df), 20)
-            table = "<table class='hist-table'><tr><th>期号</th><th>中奖号码</th></tr>"
-            for _, r in df.head(limit).iterrows():
-                balls = ""
+            st.write(f"当前视图：**{view_choice}** (本地数据库共计 {len(df)} 期)")
+            table_html = "<table class='hist-table'><tr><th>期号</th><th>开奖号码</th></tr>"
+            
+            for _, row in df.head(view_limit).iterrows():
+                balls_html = ""
                 for i, col in enumerate(d_cols):
-                    # 【核心防错处理】：不论源数据多脏，全部强转为整数再排版，杜绝格式崩溃！
-                    try:
-                        v = int(float(r[col]))
-                    except:
-                        v = 0
-                    
-                    txt = f"{v:02d}" if needs_zero else str(v)
-                    
+                    val = row[col]
+                    txt = f"{val:02d}" if needs_zero else str(val)
                     bg = "bg-red"
-                    if choice == "双色球": bg = "bg-blue" if i==6 else "bg-red"
-                    elif choice == "大乐透": bg = "bg-yellow" if i>=5 else "bg-blue"
+                    if choice == "双色球": bg = "bg-blue" if i == 6 else "bg-red"
+                    elif choice == "大乐透": bg = "bg-yellow" if i >= 5 else "bg-blue"
                     elif choice == "七星彩": bg = "bg-yellow" if i == 6 else "bg-purple"
-                    elif choice in ["福彩3D","排列3","排列5"]: bg = "bg-purple"
+                    elif choice in ["排列3", "排列5", "福彩3D"]: bg = "bg-purple"
+                    balls_html += f"<span class='ball {bg}'>{txt}</span>"
                     
-                    balls += f"<span class='ball {bg}'>{txt}</span>"
-                    if choice == "快乐8" and i == 9: balls += "<br>" # 快乐8换行显示美化
-                
+                    if choice == "快乐8" and i == 9:
+                        balls_html += "<br>"
+
                 try:
-                    display_q = int(float(r[q_col]))
+                    display_q = int(float(row[q_col]))
                 except:
-                    display_q = r[q_col]
+                    display_q = row[q_col]
                     
-                table += f"<tr><td><b>{display_q}</b></td><td>{balls}</td></tr>"
-            st.markdown(table + "</table>", unsafe_allow_html=True)
+                table_html += f"<tr><td><b>{display_q}</b></td><td>{balls_html}</td></tr>"
+            st.markdown(table_html + "</table>", unsafe_allow_html=True)
+            
         with t2:
-            st.line_chart(df.head(50).set_index(q_col)[d_cols[0]])
+            calc_df = df.head(view_limit).copy()
+            calc_df['和值'] = calc_df[d_cols].sum(axis=1)
+            st.line_chart(calc_df.sort_values(q_col).set_index(q_col)['和值'])
+
         with t3:
-            if st.button("🚀 启动演算"):
+            if st.button("🚀 启动 AI 深度演算"):
                 for p in get_prediction(choice):
                     st.markdown(f"<div class='pred-row'><div class='pred-title'>{p['name']}</div><div>{p['html']}</div></div>", unsafe_allow_html=True)
-                    st.code(p['text'])
-else:
-    st.error(f"未找到 {choice} 的数据文件，请检查文件名是否包含 '{LOTTERY_FILES[choice]}'")
+                    st.code(p['text'], language=None)
+    else: st.error("数据解析失败。")
+else: st.error(f"未找到 {choice} 的数据文件。")
