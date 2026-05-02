@@ -26,7 +26,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 自适应数据提取 (严格限制列数) ---
+# --- 2. 自适应数据提取 (✅ 已完全回退至最稳定、不挑文件的读取逻辑) ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -36,19 +36,16 @@ def load_full_data(file_path, choice):
         
         q_col = next((c for c in raw_df.columns if '期' in c or 'NO' in c.upper()), raw_df.columns[0])
         
-        # 强制修正各彩种应有的号码个数
-        ball_limits = {"双色球": 7, "大乐透": 7, "福彩3D": 3, "快乐8": 20, "排列3": 3, "排列5": 5, "七星彩": 7}
-        max_balls = ball_limits.get(choice, 7)
+        limits = {"双色球": 7, "大乐透": 7, "福彩3D": 3, "快乐8": 20, "排列3": 3, "排列5": 5, "七星彩": 7}
+        max_balls = limits.get(choice, 7)
         
-        # 严格过滤期号列之后的数据列
         q_idx = list(raw_df.columns).index(q_col)
         ball_cols = []
         for i in range(q_idx + 1, len(raw_df.columns)):
             col = raw_df.columns[i]
-            # 这里的逻辑是：如果是3D/P3/P5，数字必须<=9
-            check_val = 9 if choice in ["福彩3D", "排列3", "排列5", "七星彩"] else 81
+            # 恢复最原始的判断：只要列里面是数字就行，不再强行限制大小导致本地数据被跳过
             nums = pd.to_numeric(raw_df[col], errors='coerce').dropna()
-            if not nums.empty and (nums <= check_val).all():
+            if not nums.empty:
                 ball_cols.append(col)
             if len(ball_cols) == max_balls: break
 
@@ -57,7 +54,7 @@ def load_full_data(file_path, choice):
         clean_df.columns = new_names
         
         for c in new_names:
-            clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce').fillna(0).astype(int)
+            clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce').fillna(0)
             
         needs_zero = True if choice in ["双色球", "大乐透", "快乐8"] else False
         return clean_df.sort_values(q_col, ascending=False), q_col, new_names[1:], needs_zero, file_path
@@ -65,7 +62,7 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析错误: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 终极同步引擎 (针对性修复3D、P3、P5、快乐8) ---
+# --- 3. 终极同步引擎 (✅ 纯净正则降维打击，无视网页排版) ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
     url_map = {
@@ -80,44 +77,53 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     
     try:
         url = url_map.get(choice)
-        status.info(f"📡 正在接入 {choice} 官方数据流...")
+        status.info(f"📡 正在拉取 {choice} 最新数据...")
         res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
-        trs = soup.find_all('tr', class_='t_tr1')
-        if not trs: trs = soup.find_all('tr')
-
+        
+        trs = soup.find('tbody', id='tdata').find_all('tr') if soup.find('tbody', id='tdata') else soup.find_all('tr')
         web_rows = []
+        
         for tr in trs:
             tds = tr.find_all('td')
             if len(tds) < 4: continue
             
-            # 1. 提取期号
-            issue_str = re.sub(r'\D', '', tds[0].get_text(strip=True))
-            if len(issue_str) < 3: continue
-            issue_val = int("20" + issue_str) if len(issue_str) == 5 else int(issue_str)
+            # 1. 寻找当行真实的期号
+            issue_val = 0
+            start_idx = 1
+            for idx, td in enumerate(tds):
+                txt = td.get_text(strip=True)
+                digits = re.sub(r'\D', '', txt)
+                if 3 <= len(digits) <= 8 and int(digits) > 100:
+                    issue_val = int("20" + digits) if len(digits) == 5 else int(digits)
+                    start_idx = idx + 1
+                    break
             
-            # 2. 提取球号 (核心修复区)
+            if issue_val == 0: continue
+
+            # 2. 抓取球号（不同彩种分而治之）
             balls = []
             
             if choice in ["双色球", "大乐透"]:
-                # 保持原有好使的逻辑
+                # 您的金标准：原封不动
                 for td in tr.find_all('td', class_=['t_cfont2', 't_cfont4']):
                     v = re.sub(r'\D', '', td.get_text(strip=True))
                     if v: balls.append(int(v))
-            elif choice == "快乐8":
-                # 专门应对快乐8的20个球
-                all_nums = re.findall(r'\b\d{1,2}\b', tr.get_text(separator=' '))
-                balls = [int(n) for n in all_nums if 1 <= int(n) <= 80][:20]
             else:
-                # 3D, P3, P5, 7XC 的严苛模式：数字必须 0-9
-                # 只从带有特定样式的td中提取，或者从前几个符合条件的td提取
-                for td in tds[1:]:
-                    val_text = td.get_text(strip=True)
-                    if val_text.isdigit() and len(val_text) == 1:
-                        balls.append(int(val_text))
-                    if len(balls) == len(d_cols): break
+                # 把剩下的所有内容变成纯文本
+                rest_text = " ".join([td.get_text(separator=' ') for td in tds[start_idx:]])
+                
+                if choice == "快乐8":
+                    # 只找 1~2位 且在 1-80 范围内的数字
+                    nums = re.findall(r'(?<!\d)\d{1,2}(?!\d)', rest_text)
+                    balls = [int(n) for n in nums if 1 <= int(n) <= 80][:20]
+                else:
+                    # 3D、P3、P5、七星彩：只找“落单的” 1 位纯数字 (直接免疫和值 100 等干扰)
+                    nums = re.findall(r'(?<!\d)\d(?!\d)', rest_text)
+                    balls = [int(n) for n in nums][:len(d_cols)]
             
+            # 如果抓齐了，就塞进表里
             if len(balls) == len(d_cols):
                 row = {q_col: issue_val}
                 for i, col_name in enumerate(d_cols): row[col_name] = balls[i]
@@ -125,22 +131,29 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
 
         if web_rows:
             web_df = pd.DataFrame(web_rows)
-            # 统一期号格式，防止合并出错
+            # 安全防爆转码
             def fmt_q(v):
-                s = re.sub(r'\D', '', str(v))
-                return int(s) if s and len(s) < 10 else 0
+                try:
+                    s = re.sub(r'\D', '', str(v).split('.')[0])
+                    return int(s) if s and len(s) < 10 else 0
+                except: return 0
             df[q_col] = df[q_col].apply(fmt_q)
             
-            updated = pd.concat([web_df, df], ignore_index=True).drop_duplicates(subset=[q_col])
+            # 把网上的正确数据放前面合并，利用 drop_duplicates 自动清洗掉之前损坏的零值
+            updated = pd.concat([web_df, df], ignore_index=True)
+            updated = updated.drop_duplicates(subset=[q_col], keep='first')
             updated = updated[updated[q_col] > 0].sort_values(q_col, ascending=False)
             
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated.to_csv(save_path, index=False, encoding='utf-8-sig')
-            status.success(f"✅ {choice} 同步完成！更新了 {len(web_rows)} 期。")
+            
+            status.success(f"✅ {choice} 同步完成！更新/修复了 {len(web_rows)} 期数据。")
             st.cache_data.clear()
-            time.sleep(1); st.rerun()
+            time.sleep(1.5)
+            st.rerun()
         else:
-            status.error("❌ 抓取失败，请检查彩种选择是否与文件匹配。")
+            status.error("❌ 页面结构解析失败，未找到对应号码。")
+            time.sleep(2); status.empty()
     except Exception as e:
         status.error(f"❌ 异常: {str(e)}")
 
@@ -189,14 +202,29 @@ if target:
             for _, r in df.head(limit).iterrows():
                 balls = ""
                 for i, col in enumerate(d_cols):
-                    v = r[col]
+                    # 【核心防错处理】：不论源数据多脏，全部强转为整数再排版，杜绝格式崩溃！
+                    try:
+                        v = int(float(r[col]))
+                    except:
+                        v = 0
+                    
                     txt = f"{v:02d}" if needs_zero else str(v)
+                    
                     bg = "bg-red"
                     if choice == "双色球": bg = "bg-blue" if i==6 else "bg-red"
                     elif choice == "大乐透": bg = "bg-yellow" if i>=5 else "bg-blue"
+                    elif choice == "七星彩": bg = "bg-yellow" if i == 6 else "bg-purple"
                     elif choice in ["福彩3D","排列3","排列5"]: bg = "bg-purple"
+                    
                     balls += f"<span class='ball {bg}'>{txt}</span>"
-                table += f"<tr><td>{int(r[q_col])}</td><td>{balls}</td></tr>"
+                    if choice == "快乐8" and i == 9: balls += "<br>" # 快乐8换行显示美化
+                
+                try:
+                    display_q = int(float(r[q_col]))
+                except:
+                    display_q = r[q_col]
+                    
+                table += f"<tr><td><b>{display_q}</b></td><td>{balls}</td></tr>"
             st.markdown(table + "</table>", unsafe_allow_html=True)
         with t2:
             st.line_chart(df.head(50).set_index(q_col)[d_cols[0]])
