@@ -71,9 +71,9 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析引擎报错详情: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 核心新增：海外穿透版抓取引擎（修复期号对比如Bug、修复乱码数据Bug） ---
+# --- 3. 核心新增：全彩种海外穿透版同步引擎 ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
-    # 核心修复 1：把抓到的5位缩写期号统一补齐为7位，和本地数据库统一维度，这样就不会发生 26048 < 2026047 的误判！
+    # 期号补齐函数
     def normalize_issue(iss):
         iss_str = str(iss).strip()
         return int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
@@ -82,98 +82,69 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status_text = st.empty()
     progress_bar = st.progress(0)
     
-    status_text.info(f"📡 正在通过海外穿透通道连接 {choice} 数据中心...")
+    status_text.info(f"📡 正在通过全彩种穿透通道同步 {choice} 数据...")
     progress_bar.progress(30)
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    # 映射各彩种在 500网的接口关键字
+    api_map = {
+        "双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", 
+        "排列3": "pls", "排列5": "plw", "七星彩": "qxc"
     }
     
     new_rows = []
     try:
-        if choice == "双色球":
-            url = "https://datachart.500.com/ssq/history/newinc/history.php?limit=15"
-            res = requests.get(url, headers=headers, timeout=10)
-            res.encoding = 'utf-8'
-            soup = BeautifulSoup(res.text, 'html.parser')
-            tdata = soup.find('tbody', id='tdata')
-            
-            if tdata:
-                for tr in tdata.find_all('tr'):
-                    if tr.has_attr('class') and 'hide' in tr['class']: continue 
-                    tds = tr.find_all('td')
-                    if len(tds) > 7:
-                        raw_issue = tds[0].text.strip()
-                        issue_7d = normalize_issue(raw_issue) # 补齐期号
+        # 统一使用 500.com 商业源（海外访问最稳）
+        url_key = api_map.get(choice, "ssq")
+        url = f"https://datachart.500.com/{url_key}/history/newinc/history.php?limit=15"
+        
+        res = requests.get(url, headers=headers, timeout=10)
+        res.encoding = 'utf-8'
+        soup = BeautifulSoup(res.text, 'html.parser')
+        tdata = soup.find('tbody', id='tdata')
+        
+        if tdata:
+            for tr in tdata.find_all('tr'):
+                if tr.has_attr('class') and 'hide' in tr['class']: continue 
+                tds = tr.find_all('td')
+                if len(tds) > 5:
+                    raw_issue = tds[0].text.strip()
+                    issue_7d = normalize_issue(raw_issue)
+                    
+                    if issue_7d > latest_local_issue:
+                        # 核心定位逻辑：自动识别红球(t_cfont2)和蓝球/黄球(t_cfont4)
+                        red_balls = [int(td.text.strip()) for td in tr.find_all('td', class_='t_cfont2')]
+                        blue_balls = [int(td.text.strip()) for td in tr.find_all('td', class_='t_cfont4')]
+                        all_balls = red_balls + blue_balls
                         
-                        if issue_7d > latest_local_issue:
-                            # 核心修复 2：绝对定位抓取！用特定的HTML样式属性去匹配红球(t_cfont2)和蓝球(t_cfont4)，防止抓到垃圾列
-                            red_tds = tr.find_all('td', class_='t_cfont2')
-                            blue_tds = tr.find_all('td', class_='t_cfont4')
-                            if len(red_tds) == 6 and len(blue_tds) >= 1:
-                                all_balls = [int(td.text.strip()) for td in red_tds] + [int(blue_tds[0].text.strip())]
-                                row = {q_col: issue_7d}
-                                for i, col in enumerate(d_cols):
-                                    row[col] = all_balls[i] if i < len(all_balls) else 0
-                                new_rows.append(row)
-
-        elif choice in ["大乐透", "排列3", "排列5", "七星彩"]:
-            game_map = {"大乐透": "85", "排列3": "35", "排列5": "35", "七星彩": "04"}
-            url = f"https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry?gameNo={game_map[choice]}&pageSize=15&pageNo=1"
-            res = requests.get(url, headers=headers, timeout=10)
-            data = res.json().get('value', {}).get('list', [])
-            
-            for item in data:
-                raw_issue = item['lotteryDrawNum']
-                issue_7d = normalize_issue(raw_issue)
-                if issue_7d > latest_local_issue:
-                    balls = item['lotteryDrawResult'].split(' ')
-                    all_balls = [int(x) for x in balls if x]
-                    row = {q_col: issue_7d}
-                    for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
-                    new_rows.append(row)
-                    
-        elif choice in ["福彩3D", "快乐8"]:
-            headers["Referer"] = "http://www.cwl.gov.cn/"
-            code_map = {"福彩3D": "3d", "快乐8": "kl8"}
-            url = f"http://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name={code_map[choice]}&issueCount=15"
-            res = requests.get(url, headers=headers, timeout=10)
-            data = res.json().get('result', [])
-            
-            for item in data:
-                raw_issue = item['code']
-                issue_7d = normalize_issue(raw_issue)
-                if issue_7d > latest_local_issue:
-                    reds = item['red'].split(',')
-                    blues = item.get('blue', '').split(',') if item.get('blue') else []
-                    all_balls = [int(x) for x in reds + blues if x]
-                    row = {q_col: issue_7d}
-                    for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
-                    new_rows.append(row)
-                    
+                        # 兼容不同列数的处理
+                        row = {q_col: issue_7d}
+                        for i, col in enumerate(d_cols):
+                            row[col] = all_balls[i] if i < len(all_balls) else 0
+                        new_rows.append(row)
+        
         progress_bar.progress(80)
         
         if new_rows:
             new_df = pd.DataFrame(new_rows).sort_values(q_col, ascending=False)
             updated_df = pd.concat([new_df, df], ignore_index=True)
-            # 确保期号列没有小数点
             updated_df[q_col] = updated_df[q_col].astype(int)
             save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
             updated_df.to_csv(save_path, index=False, encoding='utf-8-sig')
             
-            status_text.success(f"✅ 同步成功！完美补齐了 {len(new_rows)} 期正确数据！")
+            status_text.success(f"✅ {choice} 同步成功！新增了 {len(new_rows)} 期正确数据！")
             progress_bar.progress(100)
             time.sleep(2)
             st.cache_data.clear()
             st.rerun()
         else:
-            status_text.success("✅ 当前已经是全网最新数据！")
+            status_text.success(f"✅ {choice} 本地已是最新！")
             progress_bar.progress(100)
             time.sleep(2)
             
     except Exception as e:
-        status_text.error(f"❌ 通道连接失败: {str(e)}")
-    
+        status_text.error(f"❌ {choice} 同步失败: {str(e)}")
     finally:
         progress_bar.empty()
         status_text.empty()
@@ -192,7 +163,10 @@ def get_prediction_sets(choice):
             nums = f"{' '.join([f'{r:02d}' for r in reds])} | {' '.join([f'{b:02d}' for b in blues])}"
             html_balls = "".join([f"<span class='pred-ball bg-blue'>{r:02d}</span>" for r in reds]) + "".join([f"<span class='pred-ball bg-yellow'>{b:02d}</span>" for b in blues])
         else:
-            raw = [random.randint(0, 9) for _ in range(3)]
+            # 兼容排列3/5, 3D等
+            n = 3 if choice in ["排列3", "福彩3D"] else 5
+            if choice == "七星彩": n = 7
+            raw = [random.randint(0, 9) for _ in range(n)]
             nums = " ".join(map(str, raw))
             html_balls = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in raw])
         results.append({"strategy": s, "text": nums, "html": html_balls})
@@ -241,7 +215,7 @@ if target_file:
                     c = "bg-red"
                     if choice == "双色球": c = "bg-blue" if i == 6 else "bg-red"
                     elif choice == "大乐透": c = "bg-yellow" if i >= 5 else "bg-blue"
-                    elif choice in ["排列3", "排列5"]: c = "bg-purple"
+                    elif choice in ["排列3", "排列5", "福彩3D"]: c = "bg-purple"
                     balls_html += f"<span class='ball {c}'>{num_str}</span>"
                 html += f"<tr><td><b>{int(row[q_col])}</b></td><td>{balls_html}</td></tr>"
             st.markdown(html + "</table>", unsafe_allow_html=True)
