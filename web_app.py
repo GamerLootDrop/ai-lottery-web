@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import time
 import random
+import requests
 from datetime import datetime
 
 # --- 1. 深度定制样式表 ---
@@ -19,7 +20,6 @@ st.markdown("""
     
     .bg-red { background-color: #f14545; }
     .bg-blue { background-color: #3b71f7; }
-    .bg-darkblue { background-color: #1a237e; }
     .bg-yellow { background-color: #f9bf15; color: #333 !important; }
     .bg-purple { background-color: #9c27b0; }
     
@@ -70,43 +70,80 @@ def load_full_data(file_path, choice):
         st.error(f"🚨 解析引擎报错详情: {str(e)}")
         return None, None, None, None, None
 
-# --- 3. 自动抓取与数据填补 ---
+# --- 3. 核心新增：官方真实接口抓取引擎 ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     latest_local_issue = int(df[q_col].max())
     status_text = st.empty()
     progress_bar = st.progress(0)
     
-    status_text.text(f"📡 正在连接 {choice} 国家开奖数据中心...")
-    time.sleep(0.5)
+    status_text.info(f"📡 正在直连 {choice} 官方数据中心...")
     progress_bar.progress(30)
     
-    status_text.text(f"🔍 发现本地最新期号: {latest_local_issue}，正在比对...")
-    progress_bar.progress(60)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01"
+    }
     
-    # 模拟数据填充逻辑（老板您提过之后要换成真实API）
-    missing_issues = [latest_local_issue + 1]
     new_rows = []
-    for issue in missing_issues:
-        row = {q_col: issue}
-        for col in d_cols:
-            row[col] = random.randint(1, 9) 
-        new_rows.append(row)
-    
-    new_df = pd.DataFrame(new_rows)
-    updated_df = pd.concat([df, new_df], ignore_index=True)
-    
     try:
-        save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
-        updated_df.to_csv(save_path, index=False, encoding='utf-8-sig')
-        progress_bar.progress(100)
-        status_text.success(f"✅ 同步完成！最新期号: {latest_local_issue + 1}")
-        time.sleep(1)
-        status_text.empty()
-        progress_bar.empty()
-        st.cache_data.clear()
-        st.rerun()
+        if choice in ["双色球", "福彩3D", "快乐8"]:
+            headers["Referer"] = "http://www.cwl.gov.cn/"
+            code_map = {"双色球": "ssq", "福彩3D": "3d", "快乐8": "kl8"}
+            url = f"http://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name={code_map[choice]}&issueCount=10"
+            res = requests.get(url, headers=headers, timeout=10)
+            res.raise_for_status()
+            data = res.json().get('result', [])
+            
+            for item in data:
+                issue = int(item['code'])
+                if issue > latest_local_issue:
+                    reds = item['red'].split(',')
+                    blues = item.get('blue', '').split(',') if item.get('blue') else []
+                    all_balls = [int(x) for x in reds + blues if x]
+                    row = {q_col: issue}
+                    for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
+                    new_rows.append(row)
+                    
+        elif choice in ["大乐透", "排列3", "排列5", "七星彩"]:
+            game_map = {"大乐透": "85", "排列3": "35", "排列5": "35", "七星彩": "04"}
+            url = f"https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry?gameNo={game_map[choice]}&pageSize=10&pageNo=1"
+            res = requests.get(url, headers=headers, timeout=10)
+            res.raise_for_status()
+            data = res.json().get('value', {}).get('list', [])
+            
+            for item in data:
+                issue = int(item['lotteryDrawNum'])
+                if issue > latest_local_issue:
+                    balls = item['lotteryDrawResult'].split(' ')
+                    all_balls = [int(x) for x in balls if x]
+                    row = {q_col: issue}
+                    for i, col in enumerate(d_cols): row[col] = all_balls[i] if i < len(all_balls) else 0
+                    new_rows.append(row)
+                    
+        progress_bar.progress(80)
+        
+        if new_rows:
+            new_df = pd.DataFrame(new_rows).sort_values(q_col, ascending=False)
+            updated_df = pd.concat([new_df, df], ignore_index=True)
+            save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
+            updated_df.to_csv(save_path, index=False, encoding='utf-8-sig')
+            
+            status_text.success(f"✅ 同步成功！补齐了 {len(new_rows)} 期最新数据！")
+            progress_bar.progress(100)
+            time.sleep(2)
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            status_text.success("✅ 当前已经是全网最新数据！")
+            progress_bar.progress(100)
+            time.sleep(2)
+            
     except Exception as e:
-        status_text.error(f"❌ 写入失败: {str(e)}")
+        status_text.error(f"❌ 官方接口连接失败: {str(e)}")
+    
+    finally:
+        progress_bar.empty()
+        status_text.empty()
 
 # --- 4. 辅助预测功能 ---
 def get_prediction_sets(choice):
@@ -161,7 +198,7 @@ if target_file:
         tab1, tab2, tab3 = st.tabs(["📜 历史大数据", "📊 走势分析", "🤖 AI 五维演算"])
         
         with tab1:
-            st.markdown(f"**当前视图：{selected_preset}**")
+            st.markdown(f"**当前视图：{selected_preset}** (本地数据库共计 {len(df)} 期)")
             html = "<table class='hist-table'><tr><th>期号</th><th>开奖号码</th></tr>"
             for _, row in df.head(show_limit).iterrows():
                 balls_html = ""
@@ -178,36 +215,27 @@ if target_file:
             
         with tab2:
             st.subheader(f"📈 走势曲线图 ({selected_preset})")
-            
-            # 这里的算法设置加回来了
             algo_choice = st.selectbox("选择分析维度", ["总和值走势", "平均值走势", "最大值波动", "最小值波动"])
-            
-            # 这里解决了同步问题：读取数据的长度严格等于 show_limit
             calc_df = df.head(show_limit).copy()
             
-            if algo_choice == "总和值走势":
-                calc_df['指标'] = calc_df[d_cols].sum(axis=1)
-            elif algo_choice == "平均值走势":
-                calc_df['指标'] = calc_df[d_cols].mean(axis=1)
-            elif algo_choice == "最大值波动":
-                calc_df['指标'] = calc_df[d_cols].max(axis=1)
-            else:
-                calc_df['指标'] = calc_df[d_cols].min(axis=1)
+            if algo_choice == "总和值走势": calc_df['指标'] = calc_df[d_cols].sum(axis=1)
+            elif algo_choice == "平均值走势": calc_df['指标'] = calc_df[d_cols].mean(axis=1)
+            elif algo_choice == "最大值波动": calc_df['指标'] = calc_df[d_cols].max(axis=1)
+            else: calc_df['指标'] = calc_df[d_cols].min(axis=1)
             
-            # 绘图：x轴为期号，y轴为选定的指标
             st.line_chart(calc_df.sort_values(q_col).set_index(q_col)['指标'])
 
         with tab3:
             st.subheader("🧠 五维联合预测")
-            if st.button("🚀 启动 AI 深度演算", use_container_width=True):
-                with st.spinner("正在分析历史规律..."):
+            if st.button("🚀 启动 AI 深度演算 (基于最新数据)", use_container_width=True):
+                with st.spinner("正在穿越历史长河检索底层规律..."):
                     time.sleep(1)
                     st.session_state.pred_sets = get_prediction_sets(choice)
             
             if st.session_state.get('pred_sets'):
                 for p in st.session_state.pred_sets:
                     st.markdown(f"<div class='pred-row'><div class='pred-title'>{p['strategy']}</div><div class='pred-balls'>{p['html']}</div></div>", unsafe_allow_html=True)
-                st.code(f"【{choice} 推荐】\n" + "\n".join([f"{p['strategy']}: {p['text']}" for p in st.session_state.pred_sets]))
+                st.code(f"【{choice} AI智算推荐】\n" + "\n".join([f"{p['strategy']}: {p['text']}" for p in st.session_state.pred_sets]), language="text")
 
-    else: st.error("数据载入失败。")
-else: st.error(f"🚨 未找到 {choice} 数据文件。")
+    else: st.error("数据载入失败，请检查文件格式。")
+else: st.error(f"🚨 未找到 {choice} 数据文件，请确保后台存在对应的 Excel 或 CSV 文件。")
