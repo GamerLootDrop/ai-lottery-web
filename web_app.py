@@ -56,7 +56,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 工具函数：倒计时 ---
+# --- 工具函数 ---
 def get_countdown():
     now = datetime.now()
     target = now.replace(hour=21, minute=30, second=0)
@@ -66,7 +66,6 @@ def get_countdown():
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}时{minutes:02d}分{seconds:02d}秒"
 
-# --- 随机播报数据 ---
 def get_fake_broadcasts():
     cities = ["广东", "浙江", "江苏", "山东", "河南", "四川", "北京", "上海"]
     algos = ["极热寻踪", "绝地反弹", "黄金均衡", "蒙特卡洛", "深度拟合"]
@@ -79,7 +78,7 @@ def get_fake_broadcasts():
         broadcast_texts.append(f"【最新喜报】{city}用户 {phone} {mins}分钟前 成功解锁「{algo}」策略！")
     return "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;🔥&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;".join(broadcast_texts)
 
-# --- 2. 混合双引擎数据提取 ---
+# --- 核心：数据提取 ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -139,7 +138,7 @@ def get_real_prediction(df_view, d_cols, choice):
         sets.append({"name": algo['name'], "html": html, "text": text_copy, "is_vip": algo['vip']})
     return sets
 
-# --- 3. 找回丢失的联网同步功能 ---
+# --- 核心：数据联网更新 ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
     game_codes = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
@@ -192,7 +191,7 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
         else: status.error("❌ 抓取失败。")
     except Exception as e: status.error(f"❌ 同步失败: {str(e)}")
 
-# --- 4. 侧边栏及配置 ---
+# --- 侧边栏布局 ---
 LOTTERY_FILES = {"福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"}
 st.sidebar.title("💎 商业决策终端")
 choice = st.sidebar.selectbox("🎯 选择实战彩种", list(LOTTERY_FILES.keys()))
@@ -210,26 +209,28 @@ st.sidebar.markdown("---")
 view_options = {"近30期": 30, "近50期": 50, "近100期": 100}
 view_choice = st.sidebar.radio("选择分析样本", list(view_options.keys()), index=1)
 
-# --- 5. 主界面逻辑 ---
+# --- 主界面逻辑 ---
 file_kw = LOTTERY_FILES[choice]
 all_files = [f for f in os.listdir(".") if file_kw in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))]
-target = all_files[0] if all_files else None
+# 🔥 这里修复了同步后不读取新文件的BUG
+target = next((f for f in all_files if '_synced' in f), all_files[0] if all_files else None)
 
 if target:
     df, q_col, d_cols, needs_zero, actual_path = load_full_data(target, choice)
     if df is not None:
         
-        # 🟢 【找回：联网同步与清理按钮】
         st.sidebar.markdown("---")
         st.sidebar.markdown(f"**📊 库中最新：** `{int(df[q_col].max())}` 期")
         if st.sidebar.button("🔄 联网同步最新开奖", use_container_width=True, type="primary"):
             sync_latest_data(df, q_col, d_cols, choice, actual_path)
+        
         st.sidebar.markdown("---")
-        if st.sidebar.button("🧹 清理缓存", use_container_width=True):
+        if st.sidebar.button("🧹 清理缓存 (遇错必点)", use_container_width=True):
             st.cache_data.clear()
+            if 'comments' in st.session_state:
+                del st.session_state['comments']
             st.rerun()
 
-        # 顶部标题与倒计时
         st.title(f"🎰 {choice} 数据智算中心")
         st.markdown(f'<div class="timer-bar">⏰ 离今日开奖截止还剩 {get_countdown()} | 核心服务器已就绪</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="marquee-wrapper"><div class="marquee-icon">📢</div><div class="marquee-content">{get_fake_broadcasts()}</div></div>', unsafe_allow_html=True)
@@ -260,7 +261,6 @@ if target:
         with t3:
             st.info(f"💡 提示：当前 AI 正根据「{view_choice}」的规律进行演算。")
             
-            # 🟢 【重点修复：表单式验证，绝不会点错】
             with st.form("ai_form"):
                 st.markdown("##### 🔑 VIP 核心算法解锁")
                 user_input_pwd = st.text_input("在下方输入口令 (加左侧微信获取)：", type="password", placeholder="请输入今日口令...")
@@ -273,7 +273,6 @@ if target:
                 
                 for p in predictions:
                     if p['is_vip'] and not is_unlocked:
-                        # 锁定状态
                         st.markdown(f"""
                         <div class='pred-row'>
                             <div class='pred-title'>{p['name']}</div>
@@ -282,7 +281,6 @@ if target:
                         </div>
                         """, unsafe_allow_html=True)
                     else:
-                        # 解锁状态
                         st.markdown(f"""
                         <div class='pred-row'>
                             <div class='pred-title'>{p['name']} <span style="color:#28a745;">✅</span></div>
@@ -295,16 +293,36 @@ if target:
                 elif is_unlocked:
                     st.success("✅ 口令验证成功！全部高级算法已为您解锁！")
 
+        # 🔥 这里修复了评论区的字典键名报错问题
         if 'comments' not in st.session_state:
             st.session_state.comments = [
-                {"u": "老彩民001", "t": "已加老板微信，口令拿到了，确实准！", "m": "2分钟前"},
-                {"u": "数据大师", "t": "这套蒙特卡洛算法比我自己算的强多了。", "m": "10分钟前"}
+                {"user": "老彩民001", "text": "已加老板微信，口令拿到了，确实准！", "time": "2分钟前"},
+                {"user": "数据大师", "text": "这套蒙特卡洛算法比我自己算的强多了。", "time": "10分钟前"}
             ]
         
         with t4:
             st.markdown("### 🏆 实时交流 (在线 1,284 人)")
             for c in st.session_state.comments:
-                st.markdown(f"""<div class="comment-box"><div class="comment-header"><span class="comment-user">{c['u']}</span><span class="comment-time">{c['m']}</span></div><div class="comment-body">{c['t']}</div></div>""", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class="comment-box">
+                    <div class="comment-header">
+                        <span class="comment-user">{c['user']}</span>
+                        <span class="comment-time">{c['time']}</span>
+                    </div>
+                    <div class="comment-body">{c['text']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            st.markdown("---")
+            new_comment = st.text_input("💡 留下您的看法...")
+            if st.button("发布评论", type="primary"):
+                if new_comment:
+                    st.session_state.comments.insert(0, {
+                        "user": "📱 当前用户 (我)",
+                        "text": new_comment,
+                        "time": "刚刚"
+                    })
+                    st.rerun()
 
 # --- 6. 版权声明 ---
 st.markdown(f"""<div class="legal-footer"><b>免责声明</b><br>本系统仅供娱乐与技术交流，不构成投资建议。购彩需理性。<br>© 2024 AI 智算决策中心 | 客服微信：{MY_WECHAT_ID}</div>""", unsafe_allow_html=True)
