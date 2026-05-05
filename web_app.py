@@ -24,15 +24,19 @@ st.markdown("""
     .hist-table { width: 100%; border-collapse: collapse; text-align: center; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 1rem; }
     .hist-table th { background-color: #f8f9fa; padding: 12px; border-bottom: 2px solid #eaeaea; color: #666; font-weight: bold; }
     .hist-table td { padding: 12px; border-bottom: 1px solid #f0f0f0; color: #333; font-size: 15px; }
+    
+    /* 🟢 专业配色系统恢复 */
     .ball { display: inline-block; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; color: white; font-weight: bold; margin: 3px 3px; font-size: 13px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     .bg-red { background-color: #f14545; }
     .bg-blue { background-color: #3b71f7; }
     .bg-yellow { background-color: #f9bf15; color: #333 !important; }
     .bg-purple { background-color: #9c27b0; }
+    .bg-lotus { background-color: #cba09e; } /* 藕色 */
+    .bg-lightblue { background-color: #5bc0de; } /* 浅蓝色 */
     
     .pred-row { background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 5px; border-left: 5px solid #f14545; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; position: relative; }
     .pred-title { width: 150px; font-weight: bold; color: #444; font-size: 15px; }
-    .pred-balls { flex-grow: 1; }
+    .pred-balls { flex-grow: 1; display: flex; flex-wrap: wrap; max-width: 400px;} /* 确保快乐8能自动换行 */
     .pred-ball { display: inline-block; width: 34px; height: 34px; line-height: 34px; border-radius: 50%; color: white; font-weight: bold; margin: 3px 4px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.15); }
     
     .vip-locked { filter: blur(6px); user-select: none; pointer-events: none; }
@@ -109,12 +113,8 @@ def load_full_data(file_path, choice):
         return clean_df.sort_values('期号', ascending=False), '期号', new_names[1:], needs_zero, file_path
     except: return None, None, None, None, None
 
-# 🟢 【重点修复：各彩种颜色专业匹配 & 生成复制文本】
+# 🟢 【颜色与排版全面恢复】
 def get_real_prediction(df_view, d_cols, choice):
-    all_balls = df_view[d_cols].values.flatten()
-    count_map = Counter(all_balls)
-    hot_nums = [x[0] for x in count_map.most_common()]
-    
     sets = []
     algos = [
         {"name": "🔥 极热寻踪", "type": "hot", "vip": False},
@@ -133,27 +133,32 @@ def get_real_prediction(df_view, d_cols, choice):
             html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r]) + f"<span class='pred-ball bg-blue'>{b:02d}</span>"
             text_copy = f"【双色球】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r]) + f" | {b:02d}"
             
-        elif choice == "大乐透": # 5红 + 2蓝
+        elif choice == "大乐透": # 5蓝 + 2黄 (按要求恢复)
             r = sorted(random.sample(range(1, 36), 5))
             b = sorted(random.sample(range(1, 13), 2))
-            html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r]) + "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in b])
+            html = "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in r]) + "".join([f"<span class='pred-ball bg-yellow'>{n:02d}</span>" for n in b])
             text_copy = f"【大乐透】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r]) + " | " + " ".join([f"{n:02d}" for n in b])
             
-        elif choice == "七星彩": # 6红 + 1蓝
+        elif choice == "七星彩": # 6紫 + 1黄 (按要求恢复)
             r = [random.randint(0, 9) for _ in range(6)]
             b = random.randint(0, 14)
-            html = "".join([f"<span class='pred-ball bg-red'>{n}</span>" for n in r]) + f"<span class='pred-ball bg-blue'>{b}</span>"
+            html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in r]) + f"<span class='pred-ball bg-yellow'>{b}</span>"
             text_copy = f"【七星彩】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r]) + f" | {b}"
             
-        elif choice == "快乐8": # 20紫
+        elif choice == "快乐8": # 20红，CSS控制两行 (按要求恢复)
             r = sorted(random.sample(range(1, 81), 20))
-            html = "".join([f"<span class='pred-ball bg-purple'>{n:02d}</span>" for n in r])
+            html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r])
             text_copy = f"【快乐8】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r])
             
-        else: # 福彩3D, 排列3, 排列5 (全红)
-            max_len = 3 if choice in ["福彩3D", "排列3"] else 5
+        elif choice == "福彩3D": # 3浅蓝 (按要求恢复)
+            r = [random.randint(0, 9) for _ in range(3)]
+            html = "".join([f"<span class='pred-ball bg-lightblue'>{n}</span>" for n in r])
+            text_copy = f"【{choice}】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r])
+            
+        else: # 排列3, 排列5 (全藕色)
+            max_len = 3 if choice == "排列3" else 5
             r = [random.randint(0, 9) for _ in range(max_len)]
-            html = "".join([f"<span class='pred-ball bg-red'>{n}</span>" for n in r])
+            html = "".join([f"<span class='pred-ball bg-lotus'>{n}</span>" for n in r])
             text_copy = f"【{choice}】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r])
             
         sets.append({"name": algo['name'], "html": html, "text": text_copy, "is_vip": algo['vip']})
@@ -261,29 +266,44 @@ if target:
             st.markdown(f"""<div class="download-lock">🔒 <b>VIP 数据下载通道</b><br><span style="font-size:13px; color:#666;">支付 19.9 元开启全量 Excel 导出权限。微信：{MY_WECHAT_ID}</span></div>""", unsafe_allow_html=True)
             table_html = "<table class='hist-table'><tr><th>期号</th><th>开奖号码</th></tr>"
             
-            # 🟢 【同步修复：历史记录显示颜色也进行了严格区分】
             for _, row in df.head(view_options[view_choice]).iterrows():
-                balls_html = ""
+                # 🟢 使用 flex 容器确保快乐8这种球多的能完美换成两行
+                max_w = "280px" if choice == "快乐8" else "100%" 
+                balls_html = f"<div style='display:flex; flex-wrap:wrap; justify-content:center; margin: 0 auto; max-width: {max_w};'>"
+                
                 for i, col in enumerate(d_cols):
                     val = row[col]
                     txt = f"{val:02d}" if needs_zero else str(val)
                     bg = "bg-red"
                     if choice == "双色球": bg = "bg-blue" if i == 6 else "bg-red"
-                    elif choice == "大乐透": bg = "bg-blue" if i >= 5 else "bg-red" # 大乐透前5红，后2蓝
-                    elif choice == "七星彩": bg = "bg-blue" if i == 6 else "bg-red" # 七星彩前6红，后1蓝
-                    elif choice == "快乐8": bg = "bg-purple"
+                    elif choice == "大乐透": bg = "bg-yellow" if i >= 5 else "bg-blue"
+                    elif choice == "七星彩": bg = "bg-yellow" if i == 6 else "bg-purple"
+                    elif choice == "快乐8": bg = "bg-red"
+                    elif choice == "福彩3D": bg = "bg-lightblue"
+                    elif choice in ["排列3", "排列5"]: bg = "bg-lotus"
+                    
                     balls_html += f"<span class='ball {bg}'>{txt}</span>"
+                balls_html += "</div>"
                 table_html += f"<tr><td><b>{int(row[q_col])}</b></td><td>{balls_html}</td></tr>"
             st.markdown(table_html + "</table>", unsafe_allow_html=True)
 
         with t2:
+            # 🟢 【恢复：深度走势多维图表】
             calc_df = df.head(view_options[view_choice]).copy()
             calc_df['和值'] = calc_df[d_cols].sum(axis=1)
-            st.markdown("### 📊 近期和值走势")
+            calc_df['跨度'] = calc_df[d_cols].max(axis=1) - calc_df[d_cols].min(axis=1)
+            calc_df['奇数个数'] = calc_df[d_cols].apply(lambda row: sum(1 for x in row if x % 2 != 0), axis=1)
+
+            st.markdown("### 📈 近期和值走势 (大盘情绪)")
             st.line_chart(calc_df.set_index('期号')['和值'])
+            
+            st.markdown("### 🎢 号码跨度振幅 (极值拉扯)")
+            st.area_chart(calc_df.set_index('期号')['跨度'], color="#f14545")
+            
+            st.markdown("### ⚖️ 奇数出号频次 (冷热分布)")
+            st.bar_chart(calc_df.set_index('期号')['奇数个数'], color="#3b71f7")
 
         with t3:
-            # 🟢 【找回：提示框里的复制文案】
             st.info(f"💡 提示：当前 AI 正根据「{view_choice}」的规律进行演算。**点击下方代码框右上角的 📋 图标即可一键复制预测号码。**")
             
             with st.form("ai_form"):
@@ -305,7 +325,6 @@ if target:
                             <div class='lock-overlay'>🔒 核心算法已被锁定</div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # 锁定状态下，代码框也显示锁定提示
                         st.code("🔒 请输入上方口令解锁后一键复制打票号码", language="text")
                     else:
                         st.markdown(f"""
@@ -314,9 +333,8 @@ if target:
                             <div class='pred-balls'>{p['html']}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # 🟢 【找回：一键复制代码框功能】
                         st.code(p['text'], language="text")
-                        st.markdown("<br>", unsafe_allow_html=True) # 增加一点空隙，让排版更舒服
+                        st.markdown("<br>", unsafe_allow_html=True)
                 
                 if user_input_pwd and not is_unlocked:
                     st.error("❌ 口令无效，请重新输入或联系老板获取密码！")
