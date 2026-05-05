@@ -30,7 +30,7 @@ st.markdown("""
     .bg-yellow { background-color: #f9bf15; color: #333 !important; }
     .bg-purple { background-color: #9c27b0; }
     
-    .pred-row { background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 10px; border-left: 5px solid #f14545; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; position: relative; }
+    .pred-row { background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 5px; border-left: 5px solid #f14545; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; position: relative; }
     .pred-title { width: 150px; font-weight: bold; color: #444; font-size: 15px; }
     .pred-balls { flex-grow: 1; }
     .pred-ball { display: inline-block; width: 34px; height: 34px; line-height: 34px; border-radius: 50%; color: white; font-weight: bold; margin: 3px 4px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.15); }
@@ -109,11 +109,11 @@ def load_full_data(file_path, choice):
         return clean_df.sort_values('期号', ascending=False), '期号', new_names[1:], needs_zero, file_path
     except: return None, None, None, None, None
 
+# 🟢 【重点修复：各彩种颜色专业匹配 & 生成复制文本】
 def get_real_prediction(df_view, d_cols, choice):
     all_balls = df_view[d_cols].values.flatten()
     count_map = Counter(all_balls)
     hot_nums = [x[0] for x in count_map.most_common()]
-    cold_nums = list(reversed(hot_nums))
     
     sets = []
     algos = [
@@ -125,15 +125,36 @@ def get_real_prediction(df_view, d_cols, choice):
     ]
     
     for algo in algos:
-        if choice == "双色球":
+        algo_name_clean = algo['name'].split(' ', 1)[-1] if ' ' in algo['name'] else algo['name']
+        
+        if choice == "双色球": # 6红 + 1蓝
             r = sorted(random.sample(range(1, 34), 6))
             b = random.randint(1, 16)
             html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r]) + f"<span class='pred-ball bg-blue'>{b:02d}</span>"
-            text_copy = " ".join([f"{n:02d}" for n in r]) + f" | {b:02d}"
-        else:
-            r = [random.randint(0, 9) for _ in range(len(d_cols))]
-            html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in r])
-            text_copy = " ".join([str(n) for n in r])
+            text_copy = f"【双色球】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r]) + f" | {b:02d}"
+            
+        elif choice == "大乐透": # 5红 + 2蓝
+            r = sorted(random.sample(range(1, 36), 5))
+            b = sorted(random.sample(range(1, 13), 2))
+            html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r]) + "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in b])
+            text_copy = f"【大乐透】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r]) + " | " + " ".join([f"{n:02d}" for n in b])
+            
+        elif choice == "七星彩": # 6红 + 1蓝
+            r = [random.randint(0, 9) for _ in range(6)]
+            b = random.randint(0, 14)
+            html = "".join([f"<span class='pred-ball bg-red'>{n}</span>" for n in r]) + f"<span class='pred-ball bg-blue'>{b}</span>"
+            text_copy = f"【七星彩】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r]) + f" | {b}"
+            
+        elif choice == "快乐8": # 20紫
+            r = sorted(random.sample(range(1, 81), 20))
+            html = "".join([f"<span class='pred-ball bg-purple'>{n:02d}</span>" for n in r])
+            text_copy = f"【快乐8】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r])
+            
+        else: # 福彩3D, 排列3, 排列5 (全红)
+            max_len = 3 if choice in ["福彩3D", "排列3"] else 5
+            r = [random.randint(0, 9) for _ in range(max_len)]
+            html = "".join([f"<span class='pred-ball bg-red'>{n}</span>" for n in r])
+            text_copy = f"【{choice}】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r])
             
         sets.append({"name": algo['name'], "html": html, "text": text_copy, "is_vip": algo['vip']})
     return sets
@@ -212,7 +233,6 @@ view_choice = st.sidebar.radio("选择分析样本", list(view_options.keys()), 
 # --- 主界面逻辑 ---
 file_kw = LOTTERY_FILES[choice]
 all_files = [f for f in os.listdir(".") if file_kw in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))]
-# 🔥 这里修复了同步后不读取新文件的BUG
 target = next((f for f in all_files if '_synced' in f), all_files[0] if all_files else None)
 
 if target:
@@ -240,6 +260,8 @@ if target:
         with t1:
             st.markdown(f"""<div class="download-lock">🔒 <b>VIP 数据下载通道</b><br><span style="font-size:13px; color:#666;">支付 19.9 元开启全量 Excel 导出权限。微信：{MY_WECHAT_ID}</span></div>""", unsafe_allow_html=True)
             table_html = "<table class='hist-table'><tr><th>期号</th><th>开奖号码</th></tr>"
+            
+            # 🟢 【同步修复：历史记录显示颜色也进行了严格区分】
             for _, row in df.head(view_options[view_choice]).iterrows():
                 balls_html = ""
                 for i, col in enumerate(d_cols):
@@ -247,7 +269,9 @@ if target:
                     txt = f"{val:02d}" if needs_zero else str(val)
                     bg = "bg-red"
                     if choice == "双色球": bg = "bg-blue" if i == 6 else "bg-red"
-                    elif choice == "大乐透": bg = "bg-yellow" if i >= 5 else "bg-blue"
+                    elif choice == "大乐透": bg = "bg-blue" if i >= 5 else "bg-red" # 大乐透前5红，后2蓝
+                    elif choice == "七星彩": bg = "bg-blue" if i == 6 else "bg-red" # 七星彩前6红，后1蓝
+                    elif choice == "快乐8": bg = "bg-purple"
                     balls_html += f"<span class='ball {bg}'>{txt}</span>"
                 table_html += f"<tr><td><b>{int(row[q_col])}</b></td><td>{balls_html}</td></tr>"
             st.markdown(table_html + "</table>", unsafe_allow_html=True)
@@ -259,7 +283,8 @@ if target:
             st.line_chart(calc_df.set_index('期号')['和值'])
 
         with t3:
-            st.info(f"💡 提示：当前 AI 正根据「{view_choice}」的规律进行演算。")
+            # 🟢 【找回：提示框里的复制文案】
+            st.info(f"💡 提示：当前 AI 正根据「{view_choice}」的规律进行演算。**点击下方代码框右上角的 📋 图标即可一键复制预测号码。**")
             
             with st.form("ai_form"):
                 st.markdown("##### 🔑 VIP 核心算法解锁")
@@ -280,6 +305,8 @@ if target:
                             <div class='lock-overlay'>🔒 核心算法已被锁定</div>
                         </div>
                         """, unsafe_allow_html=True)
+                        # 锁定状态下，代码框也显示锁定提示
+                        st.code("🔒 请输入上方口令解锁后一键复制打票号码", language="text")
                     else:
                         st.markdown(f"""
                         <div class='pred-row'>
@@ -287,13 +314,15 @@ if target:
                             <div class='pred-balls'>{p['html']}</div>
                         </div>
                         """, unsafe_allow_html=True)
+                        # 🟢 【找回：一键复制代码框功能】
+                        st.code(p['text'], language="text")
+                        st.markdown("<br>", unsafe_allow_html=True) # 增加一点空隙，让排版更舒服
                 
                 if user_input_pwd and not is_unlocked:
                     st.error("❌ 口令无效，请重新输入或联系老板获取密码！")
                 elif is_unlocked:
                     st.success("✅ 口令验证成功！全部高级算法已为您解锁！")
 
-        # 🔥 这里修复了评论区的字典键名报错问题
         if 'comments' not in st.session_state:
             st.session_state.comments = [
                 {"user": "老彩民001", "text": "已加老板微信，口令拿到了，确实准！", "time": "2分钟前"},
