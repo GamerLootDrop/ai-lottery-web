@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 import re  
 from collections import Counter
 from datetime import datetime, timedelta
+import numpy as np # 🌟 新增：用于真实概率加权和数学计算
 
 # =========================================================
 # 💰💰💰 老板专属配置区 (只需修改这里，其他地方不用动) 💰💰💰
@@ -113,9 +114,42 @@ def load_full_data(file_path, choice):
         return clean_df.sort_values('期号', ascending=False), '期号', new_names[1:], needs_zero, file_path
     except: return None, None, None, None, None
 
-# 🟢 【颜色与排版全面恢复】
+# 🌟🌟🌟 【核心替换：基于真实数学统计推演的算法】 🌟🌟🌟
 def get_real_prediction(df_view, d_cols, choice):
     sets = []
+    
+    # --- 1. 真实数据预处理 (统计当前样本池全部号码频次) ---
+    all_nums = []
+    for col in d_cols:
+        all_nums.extend(df_view[col].dropna().astype(int).tolist())
+    freq_dict = Counter(all_nums)
+    
+    # 按照频次排序 (从高到低)
+    sorted_by_freq = [item[0] for item in freq_dict.most_common()]
+    
+    # 定义各个彩种的选号规则 (红球池, 红球数, 蓝/黄球池, 蓝/黄球数)
+    rules = {
+        "双色球": (list(range(1, 34)), 6, list(range(1, 17)), 1),
+        "大乐透": (list(range(1, 36)), 5, list(range(1, 13)), 2),
+        "七星彩": (list(range(0, 10)), 6, list(range(0, 15)), 1),
+        "快乐8": (list(range(1, 81)), 20, [], 0),
+        "福彩3D": (list(range(0, 10)), 3, [], 0),
+        "排列3": (list(range(0, 10)), 3, [], 0),
+        "排列5": (list(range(0, 10)), 5, [], 0)
+    }
+    
+    pool_r, count_r, pool_b, count_b = rules.get(choice, rules["双色球"])
+    
+    # 补全未出现的冷号到频次字典中，防止概率报错
+    for n in pool_r:
+        if n not in freq_dict: freq_dict[n] = 0
+    
+    # 获取完整的冷热序列
+    hot_list_r = [n for n in sorted_by_freq if n in pool_r]
+    # 补充完全没出现过的极其冷门的号到队尾
+    hot_list_r.extend([n for n in pool_r if n not in hot_list_r]) 
+    cold_list_r = hot_list_r[::-1] # 倒序即为冷号
+    
     algos = [
         {"name": "🔥 极热寻踪", "type": "hot", "vip": False},
         {"name": "🧊 绝地反弹", "type": "cold", "vip": False},
@@ -125,44 +159,84 @@ def get_real_prediction(df_view, d_cols, choice):
     ]
     
     for algo in algos:
+        r_res, b_res = [], []
+        
+        # --- 2. 纯数学统计模型运算 ---
+        if algo['type'] == 'hot':
+            # 极热：直接取频次最高的号码
+            r_res = sorted(hot_list_r[:count_r])
+            if count_b > 0: b_res = sorted(random.sample(pool_b, count_b)) # 蓝球维持随机作为变量
+            
+        elif algo['type'] == 'cold':
+            # 绝地反弹：取遗漏最久/频次最低的号码
+            r_res = sorted(cold_list_r[:count_r])
+            if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
+            
+        elif algo['type'] == 'mix':
+            # 均衡：各取一半热号与冷号
+            half = count_r // 2
+            r_res = sorted(hot_list_r[:half] + cold_list_r[:count_r - half])
+            if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
+            
+        elif algo['type'] == 'monte':
+            # 蒙特卡洛：根据历史频次赋予每个号码概率权重，进行加权抽样计算
+            weights = [freq_dict[n] + 1 for n in pool_r] # +1防止概率为0
+            total_w = sum(weights)
+            probs = [w / total_w for w in weights]
+            # 按概率不重复抽样
+            sampled = np.random.choice(pool_r, size=count_r, replace=False, p=probs)
+            r_res = sorted(sampled.tolist())
+            if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
+            
+        elif algo['type'] == 'fit':
+            # 深度拟合：取最近一期偏离大盘均值的倾向进行纠偏计算
+            if not df_view.empty:
+                last_draw = df_view.iloc[0][d_cols[:count_r]].values
+                avg_val = np.mean(all_nums) if all_nums else 0
+                r_res_temp = []
+                for val in last_draw:
+                    fit_val = int((val + avg_val) / 2)
+                    attempts = 0
+                    # 修正数值落在合法区间内且不重复
+                    while (fit_val not in pool_r or fit_val in r_res_temp) and attempts < 100:
+                        fit_val = fit_val + 1 if fit_val < max(pool_r) else min(pool_r)
+                        attempts += 1
+                    r_res_temp.append(fit_val)
+                r_res = sorted(r_res_temp[:count_r])
+            else:
+                r_res = sorted(hot_list_r[:count_r])
+            if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
+
+        # --- 3. UI 渲染与排版 (严格保留原有 UI 格式与配色) ---
         algo_name_clean = algo['name'].split(' ', 1)[-1] if ' ' in algo['name'] else algo['name']
         
-        if choice == "双色球": # 6红 + 1蓝
-            r = sorted(random.sample(range(1, 34), 6))
-            b = random.randint(1, 16)
-            html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r]) + f"<span class='pred-ball bg-blue'>{b:02d}</span>"
-            text_copy = f"【双色球】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r]) + f" | {b:02d}"
+        if choice == "双色球": 
+            html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r_res]) + f"<span class='pred-ball bg-blue'>{b_res[0]:02d}</span>"
+            text_copy = f"【双色球】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r_res]) + f" | {b_res[0]:02d}"
             
-        elif choice == "大乐透": # 5蓝 + 2黄 (按要求恢复)
-            r = sorted(random.sample(range(1, 36), 5))
-            b = sorted(random.sample(range(1, 13), 2))
-            html = "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in r]) + "".join([f"<span class='pred-ball bg-yellow'>{n:02d}</span>" for n in b])
-            text_copy = f"【大乐透】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r]) + " | " + " ".join([f"{n:02d}" for n in b])
+        elif choice == "大乐透": 
+            html = "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in r_res]) + "".join([f"<span class='pred-ball bg-yellow'>{n:02d}</span>" for n in b_res])
+            text_copy = f"【大乐透】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r_res]) + " | " + " ".join([f"{n:02d}" for n in b_res])
             
-        elif choice == "七星彩": # 6紫 + 1黄 (按要求恢复)
-            r = [random.randint(0, 9) for _ in range(6)]
-            b = random.randint(0, 14)
-            html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in r]) + f"<span class='pred-ball bg-yellow'>{b}</span>"
-            text_copy = f"【七星彩】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r]) + f" | {b}"
+        elif choice == "七星彩": 
+            html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in r_res]) + f"<span class='pred-ball bg-yellow'>{b_res[0]}</span>"
+            text_copy = f"【七星彩】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r_res]) + f" | {b_res[0]}"
             
-        elif choice == "快乐8": # 20红，CSS控制两行 (按要求恢复)
-            r = sorted(random.sample(range(1, 81), 20))
-            html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r])
-            text_copy = f"【快乐8】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r])
+        elif choice == "快乐8": 
+            html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r_res])
+            text_copy = f"【快乐8】{algo_name_clean} 推荐号码: " + " ".join([f"{n:02d}" for n in r_res])
             
-        elif choice == "福彩3D": # 3浅蓝 (按要求恢复)
-            r = [random.randint(0, 9) for _ in range(3)]
-            html = "".join([f"<span class='pred-ball bg-lightblue'>{n}</span>" for n in r])
-            text_copy = f"【{choice}】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r])
+        elif choice == "福彩3D": 
+            html = "".join([f"<span class='pred-ball bg-lightblue'>{n}</span>" for n in r_res])
+            text_copy = f"【{choice}】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r_res])
             
-        else: # 排列3, 排列5 (全藕色)
-            max_len = 3 if choice == "排列3" else 5
-            r = [random.randint(0, 9) for _ in range(max_len)]
-            html = "".join([f"<span class='pred-ball bg-lotus'>{n}</span>" for n in r])
-            text_copy = f"【{choice}】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r])
+        else: # 排列3, 排列5 
+            html = "".join([f"<span class='pred-ball bg-lotus'>{n}</span>" for n in r_res])
+            text_copy = f"【{choice}】{algo_name_clean} 推荐号码: " + " ".join([str(n) for n in r_res])
             
         sets.append({"name": algo['name'], "html": html, "text": text_copy, "is_vip": algo['vip']})
     return sets
+# 🌟🌟🌟 【算法替换区结束】 🌟🌟🌟
 
 # --- 核心：数据联网更新 ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
