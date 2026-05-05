@@ -16,55 +16,42 @@ MY_WECHAT_ID = "252766667"           # 已帮您填好微信号
 VIP_PASSWORD = "888"                 # 付费解锁口令 (您可以每天换一个)
 # =========================================================
 
-# --- 1. 深度定制样式表 (解决遮挡，优化UI) ---
+# --- 1. 深度定制样式表 ---
 st.set_page_config(page_title="AI 大数据决策终端", layout="wide")
 st.markdown("""
     <style>
-    /* 解决顶部遮挡，增加页面边距 */
     .block-container { padding: 2.5rem 1.5rem !important; max-width: 900px; }
-    
-    /* 历史开奖表格样式 */
     .hist-table { width: 100%; border-collapse: collapse; text-align: center; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 1rem; }
     .hist-table th { background-color: #f8f9fa; padding: 12px; border-bottom: 2px solid #eaeaea; color: #666; font-weight: bold; }
     .hist-table td { padding: 12px; border-bottom: 1px solid #f0f0f0; color: #333; font-size: 15px; }
-    
-    /* 圆球通用样式 */
     .ball { display: inline-block; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; color: white; font-weight: bold; margin: 3px 3px; font-size: 13px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     .bg-red { background-color: #f14545; }
     .bg-blue { background-color: #3b71f7; }
     .bg-yellow { background-color: #f9bf15; color: #333 !important; }
     .bg-purple { background-color: #9c27b0; }
     
-    /* 预测结果行样式 */
     .pred-row { background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 10px; border-left: 5px solid #f14545; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; position: relative; }
     .pred-title { width: 150px; font-weight: bold; color: #444; font-size: 15px; }
     .pred-balls { flex-grow: 1; }
     .pred-ball { display: inline-block; width: 34px; height: 34px; line-height: 34px; border-radius: 50%; color: white; font-weight: bold; margin: 3px 4px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.15); }
     
-    /* VIP 锁定效果（高斯模糊） */
     .vip-locked { filter: blur(6px); user-select: none; pointer-events: none; }
     .lock-overlay { position: absolute; right: 20px; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.95); padding: 6px 15px; border: 2px dashed #ff4b4b; border-radius: 5px; color: #ff4b4b; font-size: 14px; font-weight: bold; z-index: 10; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     
-    /* 顶部倒计时栏 */
     .timer-bar { background: linear-gradient(90deg, #1d2b64, #f8cdda); color: white; padding: 10px; text-align: center; border-radius: 5px; font-weight: bold; margin-bottom: 15px; }
-    
-    /* 引导付费区 */
     .wechat-box { background: #f0f2f6; border-radius: 10px; padding: 15px; border: 1px solid #dcdfe6; text-align: center; margin-bottom: 10px;}
     .download-lock { background: #fff5f5; border: 1px dashed #feb2b2; padding: 15px; text-align: center; border-radius: 8px; margin-bottom: 15px; }
     
-    /* 滚动播报跑马灯 */
     .marquee-wrapper { background: linear-gradient(to right, #fff3cd, #fff8e1); padding: 10px 15px; border-radius: 8px; border-left: 4px solid #f9bf15; margin-bottom: 20px; overflow: hidden; display: flex; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
     .marquee-icon { font-size: 18px; margin-right: 10px; min-width: 25px; }
     .marquee-content { white-space: nowrap; animation: marquee 30s linear infinite; color: #856404; font-weight: bold; font-size: 14px; }
     @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(-150%); } }
     
-    /* 评论区样式 */
     .comment-box { background: #fff; border: 1px solid #eaeaea; border-radius: 8px; padding: 15px; margin-bottom: 10px; }
     .comment-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
     .comment-user { font-weight: bold; color: #1f77b4; font-size: 14px; }
     .comment-time { color: #999; font-size: 12px; }
     .comment-body { color: #444; font-size: 14px; line-height: 1.5; }
-    
     .legal-footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #eaeaea; text-align: center; color: #999; font-size: 12px; line-height: 1.8; }
     </style>
 """, unsafe_allow_html=True)
@@ -89,10 +76,10 @@ def get_fake_broadcasts():
         phone = f"1{random.randint(3,9)}{random.randint(0,9)}****{random.randint(1000,9999)}"
         algo = random.choice(algos)
         mins = random.randint(1, 59)
-        broadcast_texts.append(f"【最新喜报】{city}用户 {phone} {mins}分钟前 支付成功并解锁了「{algo}」策略！")
+        broadcast_texts.append(f"【最新喜报】{city}用户 {phone} {mins}分钟前 成功解锁「{algo}」策略！")
     return "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;🔥&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;".join(broadcast_texts)
 
-# --- 数据引擎逻辑 (保持与之前一致) ---
+# --- 2. 混合双引擎数据提取 ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -139,13 +126,12 @@ def get_real_prediction(df_view, d_cols, choice):
     ]
     
     for algo in algos:
-        # 这里为了演示生成随机且有逻辑的号码，实际可以更复杂
         if choice == "双色球":
             r = sorted(random.sample(range(1, 34), 6))
             b = random.randint(1, 16)
             html = "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in r]) + f"<span class='pred-ball bg-blue'>{b:02d}</span>"
             text_copy = " ".join([f"{n:02d}" for n in r]) + f" | {b:02d}"
-        else: # 通用处理
+        else:
             r = [random.randint(0, 9) for _ in range(len(d_cols))]
             html = "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in r])
             text_copy = " ".join([str(n) for n in r])
@@ -153,16 +139,68 @@ def get_real_prediction(df_view, d_cols, choice):
         sets.append({"name": algo['name'], "html": html, "text": text_copy, "is_vip": algo['vip']})
     return sets
 
-# --- 2. 侧边栏及配置 ---
+# --- 3. 找回丢失的联网同步功能 ---
+def sync_latest_data(df, q_col, d_cols, choice, file_path):
+    status = st.empty()
+    game_codes = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
+    game_code = game_codes.get(choice, "ssq")
+    try:
+        status.info(f"📡 正在联网获取 {choice} 最新开奖...")
+        urls = [f"https://datachart.500.com/{game_code}/history/newinc/history.php?limit=50", f"https://datachart.500.com/{game_code}/history/inc/history.php?limit=50"]
+        headers = {"User-Agent": "Mozilla/5.0"}
+        web_rows = []
+        for url in urls:
+            res = requests.get(url, headers=headers, timeout=10)
+            res.encoding = 'utf-8'
+            soup = BeautifulSoup(res.text, 'html.parser')
+            tdata = soup.find('tbody', id='tdata')
+            trs = tdata.find_all('tr') if tdata else (soup.find_all('tr', class_=['t_tr1', 't_tr2', 't_tr']) or soup.find_all('tr'))
+            for tr in trs:
+                tds = tr.find_all('td')
+                if len(tds) < len(d_cols) + 1: continue 
+                iss_str = re.sub(r'\D', '', tds[0].get_text(strip=True))
+                if len(iss_str) < 3: continue
+                issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
+                if issue_val == 0: continue
+                rest_text = "   ".join([td.get_text(separator=" ") for td in tds[1:]])
+                balls = []
+                if choice in ["福彩3D", "排列3", "排列5"]: balls = [int(n) for n in re.findall(r'\d', rest_text)]
+                elif choice == "七星彩":
+                    groups = re.findall(r'\d+', rest_text)
+                    for g in groups:
+                        if len(g) >= 3: 
+                            for char in g: balls.append(int(char))
+                        else: balls.append(int(g))
+                else: balls = [int(n) for n in re.findall(r'\d+', rest_text)]
+                balls = [n for n in balls if 0 <= n <= 81]
+                if len(balls) >= len(d_cols):
+                    row = {q_col: issue_val}
+                    for i, col_name in enumerate(d_cols): row[col_name] = balls[i]
+                    web_rows.append(row)
+            if web_rows: break
+
+        if web_rows:
+            web_df = pd.DataFrame(web_rows)
+            df[q_col] = df[q_col].apply(lambda x: int(float(x)) if len(str(int(float(x))))!=5 else int("20"+str(int(float(x)))))
+            updated = pd.concat([web_df, df], ignore_index=True).drop_duplicates(subset=[q_col], keep='first').sort_values(q_col, ascending=False)
+            save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
+            updated.to_csv(save_path, index=False, encoding='utf-8-sig')
+            status.success(f"✅ 同步成功！已更新 {len(web_rows)} 期。")
+            st.cache_data.clear()
+            time.sleep(1)
+            st.rerun()
+        else: status.error("❌ 抓取失败。")
+    except Exception as e: status.error(f"❌ 同步失败: {str(e)}")
+
+# --- 4. 侧边栏及配置 ---
 LOTTERY_FILES = {"福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"}
 st.sidebar.title("💎 商业决策终端")
 choice = st.sidebar.selectbox("🎯 选择实战彩种", list(LOTTERY_FILES.keys()))
 
-# 🔥 核心微信号引流区 (带一键复制功能)
 st.sidebar.markdown(f"""
     <div class="wechat-box">
         <span style="font-size:14px; color:#666;">获取核心【VIP内部口令】</span><br>
-        <span style="font-size:12px; color:#999;">(加微信发 29.9 红包获取)</span><br>
+        <span style="font-size:12px; color:#999;">(加微信发红包获取)</span><br>
         <b style="color:#ff4b4b; font-size:13px; display:inline-block; margin-top:10px;">👇 点击下方微信号自动复制 👇</b>
     </div>
 """, unsafe_allow_html=True)
@@ -171,11 +209,8 @@ st.sidebar.code(MY_WECHAT_ID, language="text")
 st.sidebar.markdown("---")
 view_options = {"近30期": 30, "近50期": 50, "近100期": 100}
 view_choice = st.sidebar.radio("选择分析样本", list(view_options.keys()), index=1)
-if st.sidebar.button("🧹 清理缓存", use_container_width=True):
-    st.cache_data.clear()
-    st.rerun()
 
-# --- 3. 主界面逻辑 ---
+# --- 5. 主界面逻辑 ---
 file_kw = LOTTERY_FILES[choice]
 all_files = [f for f in os.listdir(".") if file_kw in f.lower() and (f.endswith('.xls') or f.endswith('.csv'))]
 target = all_files[0] if all_files else None
@@ -183,11 +218,20 @@ target = all_files[0] if all_files else None
 if target:
     df, q_col, d_cols, needs_zero, actual_path = load_full_data(target, choice)
     if df is not None:
+        
+        # 🟢 【找回：联网同步与清理按钮】
+        st.sidebar.markdown("---")
+        st.sidebar.markdown(f"**📊 库中最新：** `{int(df[q_col].max())}` 期")
+        if st.sidebar.button("🔄 联网同步最新开奖", use_container_width=True, type="primary"):
+            sync_latest_data(df, q_col, d_cols, choice, actual_path)
+        st.sidebar.markdown("---")
+        if st.sidebar.button("🧹 清理缓存", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
         # 顶部标题与倒计时
         st.title(f"🎰 {choice} 数据智算中心")
         st.markdown(f'<div class="timer-bar">⏰ 离今日开奖截止还剩 {get_countdown()} | 核心服务器已就绪</div>', unsafe_allow_html=True)
-        
-        # 跑马灯
         st.markdown(f'<div class="marquee-wrapper"><div class="marquee-icon">📢</div><div class="marquee-content">{get_fake_broadcasts()}</div></div>', unsafe_allow_html=True)
 
         t1, t2, t3, t4 = st.tabs(["📜 历史数据", "📈 深度走势", "🤖 AI 演算", "💬 交流大厅"])
@@ -216,24 +260,29 @@ if target:
         with t3:
             st.info(f"💡 提示：当前 AI 正根据「{view_choice}」的规律进行演算。")
             
-            # 口令验证
-            user_input_pwd = st.text_input("🔑 请输入今日解锁口令 (加微信 {0} 获取)：".format(MY_WECHAT_ID), type="password")
-            is_unlocked = (user_input_pwd == VIP_PASSWORD)
-            
-            if st.button("🚀 启动 AI 深度演算", use_container_width=True):
-                with st.spinner('正在分析云端数据...'): time.sleep(1.2)
+            # 🟢 【重点修复：表单式验证，绝不会点错】
+            with st.form("ai_form"):
+                st.markdown("##### 🔑 VIP 核心算法解锁")
+                user_input_pwd = st.text_input("在下方输入口令 (加左侧微信获取)：", type="password", placeholder="请输入今日口令...")
+                submit_btn = st.form_submit_button("🚀 验证口令并启动 AI 演算", use_container_width=True)
+
+            if submit_btn:
+                is_unlocked = (user_input_pwd == VIP_PASSWORD)
+                with st.spinner('正在分析云端数据...'): time.sleep(1)
                 predictions = get_real_prediction(df.head(view_options[view_choice]), d_cols, choice)
                 
                 for p in predictions:
                     if p['is_vip'] and not is_unlocked:
+                        # 锁定状态
                         st.markdown(f"""
                         <div class='pred-row'>
                             <div class='pred-title'>{p['name']}</div>
                             <div class='pred-balls vip-locked'>{p['html']}</div>
-                            <div class='lock-overlay'>🔒 输入口令解锁号码</div>
+                            <div class='lock-overlay'>🔒 核心算法已被锁定</div>
                         </div>
                         """, unsafe_allow_html=True)
                     else:
+                        # 解锁状态
                         st.markdown(f"""
                         <div class='pred-row'>
                             <div class='pred-title'>{p['name']} <span style="color:#28a745;">✅</span></div>
@@ -242,16 +291,20 @@ if target:
                         """, unsafe_allow_html=True)
                 
                 if user_input_pwd and not is_unlocked:
-                    st.error("❌ 口令无效，请联系老板获取最新密码！")
+                    st.error("❌ 口令无效，请重新输入或联系老板获取密码！")
+                elif is_unlocked:
+                    st.success("✅ 口令验证成功！全部高级算法已为您解锁！")
 
+        if 'comments' not in st.session_state:
+            st.session_state.comments = [
+                {"u": "老彩民001", "t": "已加老板微信，口令拿到了，确实准！", "m": "2分钟前"},
+                {"u": "数据大师", "t": "这套蒙特卡洛算法比我自己算的强多了。", "m": "10分钟前"}
+            ]
+        
         with t4:
             st.markdown("### 🏆 实时交流 (在线 1,284 人)")
-            comments = [
-                {"u": "老彩民001", "t": "已加老板微信，口令拿到了，确实准！", "m": "2分钟前"},
-                {"u": "数据大师", "t": "这套蒙特卡洛算法比我自己算的强多了。", "m": "10分钟前"},
-            ]
-            for c in comments:
+            for c in st.session_state.comments:
                 st.markdown(f"""<div class="comment-box"><div class="comment-header"><span class="comment-user">{c['u']}</span><span class="comment-time">{c['m']}</span></div><div class="comment-body">{c['t']}</div></div>""", unsafe_allow_html=True)
 
-# --- 4. 版权声明 ---
+# --- 6. 版权声明 ---
 st.markdown(f"""<div class="legal-footer"><b>免责声明</b><br>本系统仅供娱乐与技术交流，不构成投资建议。购彩需理性。<br>© 2024 AI 智算决策中心 | 客服微信：{MY_WECHAT_ID}</div>""", unsafe_allow_html=True)
