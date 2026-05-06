@@ -292,6 +292,7 @@ target = next((f for f in all_files if '_synced' in f), all_files[0] if all_file
 if target:
     df, q_col, d_cols, needs_zero, actual_path = load_full_data(target, choice)
     if df is not None:
+        # ✅ 保留了联网同步按钮逻辑
         st.sidebar.markdown("---")
         st.sidebar.markdown(f"**📊 库中最新：** `{int(df[q_col].max())}` 期")
         if st.sidebar.button("🔄 联网同步最新开奖", use_container_width=True, type="primary"):
@@ -335,6 +336,7 @@ if target:
             st.markdown("### 🎢 号码跨度振幅")
             st.area_chart(calc_df.set_index('期号')['跨度'], color="#f14545")
             
+            # ✅ 完美保留了奇偶走势图
             st.markdown("### ⚖️ 奇偶分布走势 (奇数个数)")
             st.bar_chart(calc_df.set_index('期号')['奇数个数'], color="#3b71f7")
 
@@ -342,7 +344,7 @@ if target:
             st.info(f"💡 提示：当前根据「{view_choice}」演算。点击右上角 📋 复制号码。")
             
             # ====================================================================
-            # 👇 专属心水号码多维衍算 👇
+            # 👇 专属心水号码多维衍算 (加入了动态量子随机) 👇
             # ====================================================================
             st.markdown("##### 🎯 专属号码多维衍算 (支持复式拆解)")
             custom_input = st.text_input("🔮 输入您的【心水种子号】(用空格隔开)：", placeholder="例如输入：06 18，系统将推算 1码/3码/5码/6码 组合")
@@ -371,16 +373,28 @@ if target:
                         freq_dict = Counter(all_recent_nums)
                         hot_nums = [item[0] for item in freq_dict.most_common() if item[0] in pool_r]
                         
-                        calc_pool = valid_seeds.copy()
-                        for n in hot_nums:
-                            if n not in calc_pool: calc_pool.append(n)
-                        for n in pool_r:
-                            if n not in calc_pool: calc_pool.append(n)
+                        # 🚀 加入量子波动随机算法 🚀
+                        dan_pool = valid_seeds if valid_seeds else hot_nums[:5]
+                        dan_ma = sorted(random.sample(dan_pool, 1)) if dan_pool else [random.choice(pool_r)]
+                        
+                        def get_dynamic_combo(count):
+                            res = set(dan_ma) # 必须包含算出来的核心胆码
+                            # 1. 优先混入客户的其他种子号，引入 20% 的随机剔除率，制造每次不同的“AI思考感”
+                            temp_seeds = [x for x in valid_seeds if x not in res]
+                            random.shuffle(temp_seeds)
+                            for s in temp_seeds:
+                                if len(res) < count and random.random() > 0.2: 
+                                    res.add(s)
+                            # 2. 如果不够，从“历史高频热号”中加权动态补齐
+                            temp_others = [x for x in pool_r if x not in res]
+                            weight_pool = [x for x in temp_others if x in hot_nums[:15]] * 3 + temp_others
+                            while len(res) < count:
+                                res.add(random.choice(weight_pool))
+                            return sorted(list(res))
                             
-                        dan_ma = sorted(calc_pool[:1])
-                        ma_3 = sorted(calc_pool[:3])
-                        ma_5 = sorted(calc_pool[:5])
-                        ma_6 = sorted(calc_pool[:6])
+                        ma_3 = get_dynamic_combo(3)
+                        ma_5 = get_dynamic_combo(5)
+                        ma_6 = get_dynamic_combo(6)
                         
                         def format_balls(nums):
                             if choice in ["双色球", "快乐8"]: return "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in nums])
@@ -421,27 +435,40 @@ if target:
 
         with t4:
             st.markdown("### 💬 内部 VIP 交流大厅")
-            st.info("💡 站长提示：严禁在交流大厅发布广告，违规直接封号。")
+            st.info(f"🟢 当前在线活跃人数：**1,862** 人。严禁发布广告，违规直接封号。")
             
+            # 🚀 加入 50 名疯狂刷屏水军 🚀
             if 'comments' not in st.session_state:
-                st.session_state.comments = [
-                    {"user": "老彩民001", "text": f"已加老板微信 {MY_WECHAT_ID}，口令确实准！昨天跟着AI算法打中了一组！", "time": "2分钟前", "vip": True},
-                    {"user": "李哥求带", "text": "刚花了19.9买的数据包，确实好用。大家奇偶走势图怎么看啊？", "time": "5分钟前", "vip": False},
-                    {"user": "分析师-王大拿", "text": "【战绩分享】大家注意看跨度振幅，今晚必出大跨度！大底我已经用蒙特卡洛引擎算好了，稳吃！", "time": "15分钟前", "vip": True}
+                users = ["老彩民", "追梦人", "李哥", "王大拿", "数据控", "算号大师", "潜水员", "张三", "发财哥", "红单狂人", "小散户", "定海神针"]
+                msgs = [
+                    f"已加老板微信 {MY_WECHAT_ID} 拿到口令！", 
+                    "昨天蒙特卡洛准爆了！", 
+                    "19.9的数据包真香，走势图很清晰。", 
+                    "怎么发言被拦截了？", 
+                    "求今日胆码！", 
+                    "跟着AI算法打中了一组，感谢！", 
+                    "奇偶分布太神了，今晚必追奇数！", 
+                    "刚充了VIP，坐等今晚收米。",
+                    "这软件的深度拟合有点东西的啊...",
+                    "有人合买今晚的大底复式吗？"
                 ]
+                st.session_state.comments = [{"user": random.choice(users)+str(random.randint(10,99)), "text": random.choice(msgs), "time": f"{i}分钟前", "vip": random.random()>0.3} for i in range(1, 51)]
                 
-            for c in st.session_state.comments:
-                vip_tag = "👑 VIP" if c.get("vip") else "👤 普通"
-                color = "#ff4b4b" if c.get("vip") else "#999"
-                st.markdown(f'''
-                <div class="comment-box">
-                    <div class="comment-header">
-                        <span class="comment-user">{c["user"]} <span style="font-size:12px;color:{color};font-weight:bold;margin-left:5px;">{vip_tag}</span></span>
-                        <span class="comment-time">{c["time"]}</span>
+            # 使用自带滚动条的容器装载水军记录
+            chat_box = st.container(height=450)
+            with chat_box:
+                for c in st.session_state.comments:
+                    vip_tag = "👑 VIP" if c.get("vip") else "👤 普通"
+                    color = "#ff4b4b" if c.get("vip") else "#999"
+                    st.markdown(f'''
+                    <div class="comment-box" style="padding:12px; margin-bottom:8px;">
+                        <div class="comment-header">
+                            <span class="comment-user">{c["user"]} <span style="font-size:12px;color:{color};font-weight:bold;margin-left:5px;">{vip_tag}</span></span>
+                            <span class="comment-time">{c["time"]}</span>
+                        </div>
+                        <div class="comment-body" style="font-size:13px;">{c["text"]}</div>
                     </div>
-                    <div class="comment-body">{c["text"]}</div>
-                </div>
-                ''', unsafe_allow_html=True)
+                    ''', unsafe_allow_html=True)
 
             st.markdown("---")
             chat_input = st.text_input("📝 发表您的实战心得...", placeholder="在这里输入文字参与讨论...")
