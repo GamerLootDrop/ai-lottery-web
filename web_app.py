@@ -205,7 +205,7 @@ def get_real_prediction(df_view, d_cols, choice):
     return sets
 
 # --- 核心：联网数据防封缓存 ---
-@st.cache_data(ttl=3600) # 核心：每小时只去抓一次，保护服务器，提高速度
+@st.cache_data(ttl=3600)
 def fetch_from_web(game_code, choice, d_cols_len):
     urls = [f"https://datachart.500.com/{game_code}/history/newinc/history.php?limit=50", f"https://datachart.500.com/{game_code}/history/inc/history.php?limit=50"]
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -328,16 +328,21 @@ if target:
             calc_df['和值'] = calc_df[d_cols].sum(axis=1)
             calc_df['跨度'] = calc_df[d_cols].max(axis=1) - calc_df[d_cols].min(axis=1)
             calc_df['奇数个数'] = calc_df[d_cols].apply(lambda row: sum(1 for x in row if x % 2 != 0), axis=1)
+            
             st.markdown("### 📈 近期和值走势")
             st.line_chart(calc_df.set_index('期号')['和值'])
+            
             st.markdown("### 🎢 号码跨度振幅")
             st.area_chart(calc_df.set_index('期号')['跨度'], color="#f14545")
+            
+            st.markdown("### ⚖️ 奇偶分布走势 (奇数个数)")
+            st.bar_chart(calc_df.set_index('期号')['奇数个数'], color="#3b71f7")
 
         with t3:
             st.info(f"💡 提示：当前根据「{view_choice}」演算。点击右上角 📋 复制号码。")
             
             # ====================================================================
-            # 👇 新增功能：专属心水号码多维衍算 👇
+            # 👇 专属心水号码多维衍算 👇
             # ====================================================================
             st.markdown("##### 🎯 专属号码多维衍算 (支持复式拆解)")
             custom_input = st.text_input("🔮 输入您的【心水种子号】(用空格隔开)：", placeholder="例如输入：06 18，系统将推算 1码/3码/5码/6码 组合")
@@ -346,7 +351,6 @@ if target:
                 if custom_input.strip():
                     with st.spinner('AI 正在融合历史高频数据，为您拆解胆拖复式矩阵...'):
                         time.sleep(1)
-                        # 解析用户输入的数字
                         seed_nums = [int(n) for n in re.findall(r'\d+', custom_input)]
                         rules = {
                             "双色球": (list(range(1, 34)), 6, list(range(1, 17)), 1),
@@ -359,30 +363,25 @@ if target:
                         }
                         pool_r, count_r, pool_b, count_b = rules.get(choice, rules["双色球"])
                         
-                        # 过滤合规的种子号码并去重
                         valid_seeds = list(dict.fromkeys([n for n in seed_nums if n in pool_r]))
                         
-                        # 获取近期热号，用于智能填充不足的位数
                         all_recent_nums = []
                         for col in d_cols:
                             all_recent_nums.extend(df.head(50)[col].dropna().astype(int).tolist())
                         freq_dict = Counter(all_recent_nums)
                         hot_nums = [item[0] for item in freq_dict.most_common() if item[0] in pool_r]
                         
-                        # 构建演算池：客户心水优先 -> 历史热号补齐 -> 常规号码保底
                         calc_pool = valid_seeds.copy()
                         for n in hot_nums:
                             if n not in calc_pool: calc_pool.append(n)
                         for n in pool_r:
                             if n not in calc_pool: calc_pool.append(n)
                             
-                        # 提取 1/3/5/6 码组合
                         dan_ma = sorted(calc_pool[:1])
                         ma_3 = sorted(calc_pool[:3])
                         ma_5 = sorted(calc_pool[:5])
                         ma_6 = sorted(calc_pool[:6])
                         
-                        # UI 渲染函数
                         def format_balls(nums):
                             if choice in ["双色球", "快乐8"]: return "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in nums])
                             elif choice == "大乐透": return "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in nums])
@@ -391,14 +390,9 @@ if target:
                             else: return "".join([f"<span class='pred-ball bg-lotus'>{n}</span>" for n in nums])
 
                         st.markdown("###### 📊 AI 多维拟合结果")
-                        
-                        # 1. 核心胆码
                         st.markdown(f"<div class='pred-row'><div class='pred-title'>🎯 核心胆码 (1码)</div><div class='pred-balls'>{format_balls(dan_ma)}</div></div>", unsafe_allow_html=True)
-                        # 2. 精选三码
                         st.markdown(f"<div class='pred-row'><div class='pred-title'>🥉 精选组合 (3码)</div><div class='pred-balls'>{format_balls(ma_3)}</div></div>", unsafe_allow_html=True)
-                        # 3. 高命中五码
                         st.markdown(f"<div class='pred-row'><div class='pred-title'>🥈 高频推荐 (5码)</div><div class='pred-balls'>{format_balls(ma_5)}</div></div>", unsafe_allow_html=True)
-                        # 4. 大底六码复式
                         st.markdown(f"<div class='pred-row'><div class='pred-title'>🥇 大底复式 (6码)</div><div class='pred-balls'>{format_balls(ma_6)}</div></div>", unsafe_allow_html=True)
                         
                         text_copy = f"【{choice}】专属衍生拟合：\n核心胆码: {' '.join([str(n) for n in dan_ma])}\n精选三码: {' '.join([str(n) for n in ma_3])}\n高频五码: {' '.join([str(n) for n in ma_5])}\n大底复式: {' '.join([str(n) for n in ma_6])}"
@@ -426,10 +420,36 @@ if target:
                         st.code(p['text'], language="text")
 
         with t4:
+            st.markdown("### 💬 内部 VIP 交流大厅")
+            st.info("💡 站长提示：严禁在交流大厅发布广告，违规直接封号。")
+            
             if 'comments' not in st.session_state:
-                st.session_state.comments = [{"user": "老彩民001", "text": "已加老板微信，口令确实准！", "time": "2分钟前"}]
+                st.session_state.comments = [
+                    {"user": "老彩民001", "text": f"已加老板微信 {MY_WECHAT_ID}，口令确实准！昨天跟着AI算法打中了一组！", "time": "2分钟前", "vip": True},
+                    {"user": "李哥求带", "text": "刚花了19.9买的数据包，确实好用。大家奇偶走势图怎么看啊？", "time": "5分钟前", "vip": False},
+                    {"user": "分析师-王大拿", "text": "【战绩分享】大家注意看跨度振幅，今晚必出大跨度！大底我已经用蒙特卡洛引擎算好了，稳吃！", "time": "15分钟前", "vip": True}
+                ]
+                
             for c in st.session_state.comments:
-                st.markdown(f'<div class="comment-box"><div class="comment-header"><span class="comment-user">{c["user"]}</span><span>{c["time"]}</span></div><div>{c["text"]}</div></div>', unsafe_allow_html=True)
+                vip_tag = "👑 VIP" if c.get("vip") else "👤 普通"
+                color = "#ff4b4b" if c.get("vip") else "#999"
+                st.markdown(f'''
+                <div class="comment-box">
+                    <div class="comment-header">
+                        <span class="comment-user">{c["user"]} <span style="font-size:12px;color:{color};font-weight:bold;margin-left:5px;">{vip_tag}</span></span>
+                        <span class="comment-time">{c["time"]}</span>
+                    </div>
+                    <div class="comment-body">{c["text"]}</div>
+                </div>
+                ''', unsafe_allow_html=True)
+
+            st.markdown("---")
+            chat_input = st.text_input("📝 发表您的实战心得...", placeholder="在这里输入文字参与讨论...")
+            if st.button("🚀 发送留言", use_container_width=True, type="primary"):
+                if chat_input:
+                    st.error(f"🔒 发送失败：您当前为【游客状态】！请加微信 {MY_WECHAT_ID} 获取内部授权码后再发言！")
+                else:
+                    st.warning("⚠️ 不能发送空消息哦！")
 
 # --- 🌟 侧边栏底部：全自动逼单广告位 🌟 ---
 st.sidebar.markdown("---")
