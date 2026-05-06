@@ -335,6 +335,80 @@ if target:
 
         with t3:
             st.info(f"💡 提示：当前根据「{view_choice}」演算。点击右上角 📋 复制号码。")
+            
+            # ====================================================================
+            # 👇 新增功能：专属心水号码多维衍算 👇
+            # ====================================================================
+            st.markdown("##### 🎯 专属号码多维衍算 (支持复式拆解)")
+            custom_input = st.text_input("🔮 输入您的【心水种子号】(用空格隔开)：", placeholder="例如输入：06 18，系统将推算 1码/3码/5码/6码 组合")
+            
+            if st.button("🪄 一键衍生拟合", use_container_width=True, type="secondary"):
+                if custom_input.strip():
+                    with st.spinner('AI 正在融合历史高频数据，为您拆解胆拖复式矩阵...'):
+                        time.sleep(1)
+                        # 解析用户输入的数字
+                        seed_nums = [int(n) for n in re.findall(r'\d+', custom_input)]
+                        rules = {
+                            "双色球": (list(range(1, 34)), 6, list(range(1, 17)), 1),
+                            "大乐透": (list(range(1, 36)), 5, list(range(1, 13)), 2),
+                            "七星彩": (list(range(0, 10)), 6, list(range(0, 15)), 1),
+                            "快乐8": (list(range(1, 81)), 20, [], 0),
+                            "福彩3D": (list(range(0, 10)), 3, [], 0),
+                            "排列3": (list(range(0, 10)), 3, [], 0),
+                            "排列5": (list(range(0, 10)), 5, [], 0)
+                        }
+                        pool_r, count_r, pool_b, count_b = rules.get(choice, rules["双色球"])
+                        
+                        # 过滤合规的种子号码并去重
+                        valid_seeds = list(dict.fromkeys([n for n in seed_nums if n in pool_r]))
+                        
+                        # 获取近期热号，用于智能填充不足的位数
+                        all_recent_nums = []
+                        for col in d_cols:
+                            all_recent_nums.extend(df.head(50)[col].dropna().astype(int).tolist())
+                        freq_dict = Counter(all_recent_nums)
+                        hot_nums = [item[0] for item in freq_dict.most_common() if item[0] in pool_r]
+                        
+                        # 构建演算池：客户心水优先 -> 历史热号补齐 -> 常规号码保底
+                        calc_pool = valid_seeds.copy()
+                        for n in hot_nums:
+                            if n not in calc_pool: calc_pool.append(n)
+                        for n in pool_r:
+                            if n not in calc_pool: calc_pool.append(n)
+                            
+                        # 提取 1/3/5/6 码组合
+                        dan_ma = sorted(calc_pool[:1])
+                        ma_3 = sorted(calc_pool[:3])
+                        ma_5 = sorted(calc_pool[:5])
+                        ma_6 = sorted(calc_pool[:6])
+                        
+                        # UI 渲染函数
+                        def format_balls(nums):
+                            if choice in ["双色球", "快乐8"]: return "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in nums])
+                            elif choice == "大乐透": return "".join([f"<span class='pred-ball bg-blue'>{n:02d}</span>" for n in nums])
+                            elif choice == "七星彩": return "".join([f"<span class='pred-ball bg-purple'>{n}</span>" for n in nums])
+                            elif choice == "福彩3D": return "".join([f"<span class='pred-ball bg-lightblue'>{n}</span>" for n in nums])
+                            else: return "".join([f"<span class='pred-ball bg-lotus'>{n}</span>" for n in nums])
+
+                        st.markdown("###### 📊 AI 多维拟合结果")
+                        
+                        # 1. 核心胆码
+                        st.markdown(f"<div class='pred-row'><div class='pred-title'>🎯 核心胆码 (1码)</div><div class='pred-balls'>{format_balls(dan_ma)}</div></div>", unsafe_allow_html=True)
+                        # 2. 精选三码
+                        st.markdown(f"<div class='pred-row'><div class='pred-title'>🥉 精选组合 (3码)</div><div class='pred-balls'>{format_balls(ma_3)}</div></div>", unsafe_allow_html=True)
+                        # 3. 高命中五码
+                        st.markdown(f"<div class='pred-row'><div class='pred-title'>🥈 高频推荐 (5码)</div><div class='pred-balls'>{format_balls(ma_5)}</div></div>", unsafe_allow_html=True)
+                        # 4. 大底六码复式
+                        st.markdown(f"<div class='pred-row'><div class='pred-title'>🥇 大底复式 (6码)</div><div class='pred-balls'>{format_balls(ma_6)}</div></div>", unsafe_allow_html=True)
+                        
+                        text_copy = f"【{choice}】专属衍生拟合：\n核心胆码: {' '.join([str(n) for n in dan_ma])}\n精选三码: {' '.join([str(n) for n in ma_3])}\n高频五码: {' '.join([str(n) for n in ma_5])}\n大底复式: {' '.join([str(n) for n in ma_6])}"
+                        st.code(text_copy, language="text")
+                else:
+                    st.warning("⚠️ 报告老板，请先输入几个您的心水号码！")
+            
+            st.markdown("---")
+            # ====================================================================
+
             with st.form("ai_form"):
                 st.markdown("##### 🔑 VIP 核心算法解锁")
                 user_input_pwd = st.text_input("在下方输入口令：", type="password", placeholder="请输入今日口令...")
