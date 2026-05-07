@@ -17,6 +17,15 @@ MY_WECHAT_ID = "252766667"           # 已帮您填好微信号
 VIP_PASSWORD = "888"                 # 付费解锁口令
 # =========================================================
 
+# --- 0. 隐形访客统计 (仅后台记录) ---
+visit_file = "visit_log.txt"
+if not os.path.exists(visit_file):
+    with open(visit_file, "w") as f: f.write("0")
+with open(visit_file, "r") as f:
+    current_v = int(f.read())
+new_v = current_v + 1
+with open(visit_file, "w") as f: f.write(str(new_v))
+
 # --- 1. 深度定制样式表 ---
 st.set_page_config(page_title="AI 大数据决策终端", layout="wide")
 st.markdown("""
@@ -82,7 +91,7 @@ def get_fake_broadcasts():
         broadcast_texts.append(f"【最新喜报】{city}用户 {phone} {mins}分钟前 成功解锁「{algo}」策略！")
     return "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;🔥&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;".join(broadcast_texts)
 
-# --- 核心：数据提取 ---
+# --- 核心：数据载入 ---
 @st.cache_data
 def load_full_data(file_path, choice):
     try:
@@ -113,7 +122,7 @@ def load_full_data(file_path, choice):
         return clean_df.sort_values('期号', ascending=False), '期号', new_names[1:], needs_zero, file_path
     except: return None, None, None, None, None
 
-# 🌟🌟🌟 【AI 算法引擎：基于真实 NumPy 数学推演】 🌟🌟🌟
+# 🌟🌟🌟 【AI 算法引擎：已移除缓存，确保每次点击号码均有动态变化】 🌟🌟🌟
 def get_real_prediction(df_view, d_cols, choice):
     sets = []
     all_nums = []
@@ -150,15 +159,16 @@ def get_real_prediction(df_view, d_cols, choice):
     
     for algo in algos:
         r_res, b_res = [], []
+        # 增加随机扰动，防止结果完全静态
         if algo['type'] == 'hot':
-            r_res = sorted(hot_list_r[:count_r])
+            r_res = sorted(random.sample(hot_list_r[:count_r+2], count_r))
             if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
         elif algo['type'] == 'cold':
-            r_res = sorted(cold_list_r[:count_r])
+            r_res = sorted(random.sample(cold_list_r[:count_r+2], count_r))
             if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
         elif algo['type'] == 'mix':
             half = count_r // 2
-            r_res = sorted(hot_list_r[:half] + cold_list_r[:count_r - half])
+            r_res = sorted(random.sample(hot_list_r[:half+2], half) + random.sample(cold_list_r[:count_r-half+2], count_r-half))
             if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
         elif algo['type'] == 'monte':
             weights = [freq_dict[n] + 1 for n in pool_r]
@@ -172,7 +182,7 @@ def get_real_prediction(df_view, d_cols, choice):
                 avg_val = np.mean(all_nums) if all_nums else 0
                 r_res_temp = []
                 for val in last_draw:
-                    fit_val = int((val + avg_val) / 2)
+                    fit_val = int((val + avg_val) / 2) + random.randint(-1, 1)
                     attempts = 0
                     while (fit_val not in pool_r or fit_val in r_res_temp) and attempts < 100:
                         fit_val = fit_val + 1 if fit_val < max(pool_r) else min(pool_r)
@@ -204,7 +214,7 @@ def get_real_prediction(df_view, d_cols, choice):
         sets.append({"name": algo['name'], "html": html, "text": text_copy, "is_vip": algo['vip']})
     return sets
 
-# --- 核心：联网数据防封缓存 ---
+# --- 核心：联网数据防封缓存 (必须保留 TTL 确保 IP 安全) ---
 @st.cache_data(ttl=3600)
 def fetch_from_web(game_code, choice, d_cols_len):
     urls = [f"https://datachart.500.com/{game_code}/history/newinc/history.php?limit=50", f"https://datachart.500.com/{game_code}/history/inc/history.php?limit=50"]
@@ -292,7 +302,6 @@ target = next((f for f in all_files if '_synced' in f), all_files[0] if all_file
 if target:
     df, q_col, d_cols, needs_zero, actual_path = load_full_data(target, choice)
     if df is not None:
-        # ✅ 保留了联网同步按钮逻辑
         st.sidebar.markdown("---")
         st.sidebar.markdown(f"**📊 库中最新：** `{int(df[q_col].max())}` 期")
         if st.sidebar.button("🔄 联网同步最新开奖", use_container_width=True, type="primary"):
@@ -332,20 +341,14 @@ if target:
             
             st.markdown("### 📈 近期和值走势")
             st.line_chart(calc_df.set_index('期号')['和值'])
-            
             st.markdown("### 🎢 号码跨度振幅")
             st.area_chart(calc_df.set_index('期号')['跨度'], color="#f14545")
-            
-            # ✅ 完美保留了奇偶走势图
             st.markdown("### ⚖️ 奇偶分布走势 (奇数个数)")
             st.bar_chart(calc_df.set_index('期号')['奇数个数'], color="#3b71f7")
 
         with t3:
-            st.info(f"💡 提示：当前根据「{view_choice}」演算。点击右上角 📋 复制号码。")
+            st.info(f"💡 提示：当前根据「{view_choice}」演算。点击右侧 📋 复制号码。")
             
-            # ====================================================================
-            # 👇 专属心水号码多维衍算 (加入了动态量子随机) 👇
-            # ====================================================================
             st.markdown("##### 🎯 专属号码多维衍算 (支持复式拆解)")
             custom_input = st.text_input("🔮 输入您的【心水种子号】(用空格隔开)：", placeholder="例如输入：06 18，系统将推算 1码/3码/5码/6码 组合")
             
@@ -364,7 +367,6 @@ if target:
                             "排列5": (list(range(0, 10)), 5, [], 0)
                         }
                         pool_r, count_r, pool_b, count_b = rules.get(choice, rules["双色球"])
-                        
                         valid_seeds = list(dict.fromkeys([n for n in seed_nums if n in pool_r]))
                         
                         all_recent_nums = []
@@ -373,28 +375,21 @@ if target:
                         freq_dict = Counter(all_recent_nums)
                         hot_nums = [item[0] for item in freq_dict.most_common() if item[0] in pool_r]
                         
-                        # 🚀 加入量子波动随机算法 🚀
                         dan_pool = valid_seeds if valid_seeds else hot_nums[:5]
                         dan_ma = sorted(random.sample(dan_pool, 1)) if dan_pool else [random.choice(pool_r)]
                         
                         def get_dynamic_combo(count):
-                            res = set(dan_ma) # 必须包含算出来的核心胆码
-                            # 1. 优先混入客户的其他种子号，引入 20% 的随机剔除率，制造每次不同的“AI思考感”
+                            res = set(dan_ma)
                             temp_seeds = [x for x in valid_seeds if x not in res]
                             random.shuffle(temp_seeds)
                             for s in temp_seeds:
-                                if len(res) < count and random.random() > 0.2: 
-                                    res.add(s)
-                            # 2. 如果不够，从“历史高频热号”中加权动态补齐
+                                if len(res) < count and random.random() > 0.1: res.add(s)
                             temp_others = [x for x in pool_r if x not in res]
                             weight_pool = [x for x in temp_others if x in hot_nums[:15]] * 3 + temp_others
-                            while len(res) < count:
-                                res.add(random.choice(weight_pool))
+                            while len(res) < count: res.add(random.choice(weight_pool))
                             return sorted(list(res))
                             
-                        ma_3 = get_dynamic_combo(3)
-                        ma_5 = get_dynamic_combo(5)
-                        ma_6 = get_dynamic_combo(6)
+                        ma_3 = get_dynamic_combo(3); ma_5 = get_dynamic_combo(5); ma_6 = get_dynamic_combo(6)
                         
                         def format_balls(nums):
                             if choice in ["双色球", "快乐8"]: return "".join([f"<span class='pred-ball bg-red'>{n:02d}</span>" for n in nums])
@@ -408,15 +403,10 @@ if target:
                         st.markdown(f"<div class='pred-row'><div class='pred-title'>🥉 精选组合 (3码)</div><div class='pred-balls'>{format_balls(ma_3)}</div></div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='pred-row'><div class='pred-title'>🥈 高频推荐 (5码)</div><div class='pred-balls'>{format_balls(ma_5)}</div></div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='pred-row'><div class='pred-title'>🥇 大底复式 (6码)</div><div class='pred-balls'>{format_balls(ma_6)}</div></div>", unsafe_allow_html=True)
-                        
-                        text_copy = f"【{choice}】专属衍生拟合：\n核心胆码: {' '.join([str(n) for n in dan_ma])}\n精选三码: {' '.join([str(n) for n in ma_3])}\n高频五码: {' '.join([str(n) for n in ma_5])}\n大底复式: {' '.join([str(n) for n in ma_6])}"
-                        st.code(text_copy, language="text")
-                else:
-                    st.warning("⚠️ 报告老板，请先输入几个您的心水号码！")
+                        st.code(f"核心胆码: {' '.join([str(n) for n in dan_ma])}\n精选组合: {' '.join([str(n) for n in ma_3])}\n推荐组合: {' '.join([str(n) for n in ma_5])}\n大底复式: {' '.join([str(n) for n in ma_6])}")
+                else: st.warning("⚠️ 报告老板，请先输入几个您的心水号码！")
             
             st.markdown("---")
-            # ====================================================================
-
             with st.form("ai_form"):
                 st.markdown("##### 🔑 VIP 核心算法解锁")
                 user_input_pwd = st.text_input("在下方输入口令：", type="password", placeholder="请输入今日口令...")
@@ -424,7 +414,7 @@ if target:
 
             if submit_btn:
                 is_unlocked = (user_input_pwd == VIP_PASSWORD)
-                with st.spinner('分析中...'): time.sleep(1)
+                with st.spinner('AI 正在进行动态推演...'): time.sleep(1)
                 predictions = get_real_prediction(df.head(view_options[view_choice]), d_cols, choice)
                 for p in predictions:
                     if p['is_vip'] and not is_unlocked:
@@ -436,58 +426,27 @@ if target:
         with t4:
             st.markdown("### 💬 内部 VIP 交流大厅")
             st.info(f"🟢 当前在线活跃人数：**1,862** 人。严禁发布广告，违规直接封号。")
-            
-            # 🚀 加入 50 名疯狂刷屏水军 🚀
             if 'comments' not in st.session_state:
                 users = ["老彩民", "追梦人", "李哥", "王大拿", "数据控", "算号大师", "潜水员", "张三", "发财哥", "红单狂人", "小散户", "定海神针"]
-                msgs = [
-                    f"已加老板微信 {MY_WECHAT_ID} 拿到口令！", 
-                    "昨天蒙特卡洛准爆了！", 
-                    "19.9的数据包真香，走势图很清晰。", 
-                    "怎么发言被拦截了？", 
-                    "求今日胆码！", 
-                    "跟着AI算法打中了一组，感谢！", 
-                    "奇偶分布太神了，今晚必追奇数！", 
-                    "刚充了VIP，坐等今晚收米。",
-                    "这软件的深度拟合有点东西的啊...",
-                    "有人合买今晚的大底复式吗？"
-                ]
+                msgs = [f"已加老板微信 {MY_WECHAT_ID} 拿到口令！", "昨天蒙特卡洛准爆了！", "19.9的数据包真香，走势图很清晰。", "求今日胆码！", "跟着AI算法打中了一组，感谢！", "奇偶分布太神了，今晚必追奇数！", "刚充了VIP，坐等今晚收米。", "这软件的深度拟合有点东西的啊...", "有人合买今晚的大底复式吗？"]
                 st.session_state.comments = [{"user": random.choice(users)+str(random.randint(10,99)), "text": random.choice(msgs), "time": f"{i}分钟前", "vip": random.random()>0.3} for i in range(1, 51)]
-                
-            # 使用自带滚动条的容器装载水军记录
             chat_box = st.container(height=450)
             with chat_box:
                 for c in st.session_state.comments:
                     vip_tag = "👑 VIP" if c.get("vip") else "👤 普通"
                     color = "#ff4b4b" if c.get("vip") else "#999"
-                    st.markdown(f'''
-                    <div class="comment-box" style="padding:12px; margin-bottom:8px;">
-                        <div class="comment-header">
-                            <span class="comment-user">{c["user"]} <span style="font-size:12px;color:{color};font-weight:bold;margin-left:5px;">{vip_tag}</span></span>
-                            <span class="comment-time">{c["time"]}</span>
-                        </div>
-                        <div class="comment-body" style="font-size:13px;">{c["text"]}</div>
-                    </div>
-                    ''', unsafe_allow_html=True)
-
-            st.markdown("---")
+                    st.markdown(f'''<div class="comment-box"><div class="comment-header"><span class="comment-user">{c["user"]} <span style="font-size:12px;color:{color};font-weight:bold;margin-left:5px;">{vip_tag}</span></span><span class="comment-time">{c["time"]}</span></div><div class="comment-body">{c["text"]}</div></div>''', unsafe_allow_html=True)
             chat_input = st.text_input("📝 发表您的实战心得...", placeholder="在这里输入文字参与讨论...")
             if st.button("🚀 发送留言", use_container_width=True, type="primary"):
-                if chat_input:
-                    st.error(f"🔒 发送失败：您当前为【游客状态】！请加微信 {MY_WECHAT_ID} 获取内部授权码后再发言！")
-                else:
-                    st.warning("⚠️ 不能发送空消息哦！")
+                st.error(f"🔒 发送失败：您当前为【游客状态】！请加微信 {MY_WECHAT_ID} 获取内部授权码后再发言！")
 
-# --- 🌟 侧边栏底部：全自动逼单广告位 🌟 ---
 st.sidebar.markdown("---")
+with st.sidebar.expander("🛠️ 系统监控"):
+    st.write(f"📊 累计总访问量：`{new_v}`")
+    if st.button("刷新统计"): st.rerun()
+
 st.sidebar.error("🔥 内部数据福利")
-st.sidebar.markdown(f"""
-- ✅ **20年** 历史开奖全库
-- ✅ **Excel** 格式（支持自主分析）
-- ✅ **自动更新** 教程（一键同步）
-- 💰 限时特惠：**19.9 元**
-""")
+st.sidebar.markdown(f"""- ✅ **20年** 历史开奖全库\n- ✅ **Excel** 格式（支持自主分析）\n- ✅ **自动更新** 教程（一键同步）\n- 💰 限时特惠：**19.9 元**""")
 st.sidebar.write("👇 加站长微信购买数据包：")
 st.sidebar.code(MY_WECHAT_ID, language="text")
-
 st.markdown(f"""<div class="legal-footer"><b>免责声明</b><br>本系统仅供娱乐与技术交流。购彩需理性。<br>© 2024 AI 智算中心 | 客服微信：{MY_WECHAT_ID}</div>""", unsafe_allow_html=True)
