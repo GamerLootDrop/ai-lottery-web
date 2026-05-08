@@ -5,7 +5,7 @@ import time
 import random
 import requests
 from bs4 import BeautifulSoup
-import re  
+import re
 from collections import Counter
 from datetime import datetime, timedelta
 import numpy as np 
@@ -218,8 +218,10 @@ def get_real_prediction(df_view, d_cols, choice):
 @st.cache_data(ttl=3600)
 def fetch_from_web(game_code, choice, d_cols_len):
     urls = [f"https://datachart.500.com/{game_code}/history/newinc/history.php?limit=50", f"https://datachart.500.com/{game_code}/history/inc/history.php?limit=50"]
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # 升级了 User-Agent，伪装成真实浏览器，防封锁能力更强
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     web_rows = []
+    
     for url in urls:
         try:
             res = requests.get(url, headers=headers, timeout=10)
@@ -227,27 +229,55 @@ def fetch_from_web(game_code, choice, d_cols_len):
             soup = BeautifulSoup(res.text, 'html.parser')
             tdata = soup.find('tbody', id='tdata')
             trs = tdata.find_all('tr') if tdata else (soup.find_all('tr', class_=['t_tr1', 't_tr2', 't_tr']) or soup.find_all('tr'))
+            
             for tr in trs:
                 tds = tr.find_all('td')
                 if len(tds) < d_cols_len + 1: continue 
+                
+                # 提取期号
                 iss_str = re.sub(r'\D', '', tds[0].get_text(strip=True))
                 if len(iss_str) < 3: continue
                 issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
-                rest_text = "   ".join([td.get_text(separator=" ") for td in tds[1:]])
-                if choice in ["福彩3D", "排列3", "排列5"]: balls = [int(n) for n in re.findall(r'\d', rest_text)]
+                
+                # ========== 🛡️ 老板专属：新版精准抗干扰抓取逻辑 ==========
+                balls = []
+                if choice == "快乐8":
+                    # 快乐8：从前面区域提取所有 1-80 范围内的数字，完美匹配 20 个球
+                    text_block = " ".join([td.get_text(separator=" ") for td in tds[1:25]])
+                    nums = [int(n) for n in re.findall(r'\b\d{1,2}\b', text_block)]
+                    balls = [n for n in nums if 1 <= n <= 80][:d_cols_len]
+                    
+                elif choice in ["排列5", "排列3", "福彩3D"]:
+                    # 这些彩种号码经常连体（如12345）或含有杂乱空格，直接提取纯净数字
+                    text_block = "".join([td.get_text(strip=True) for td in tds[1:8]])
+                    digits = re.findall(r'\d', text_block)
+                    balls = [int(d) for d in digits][:d_cols_len]
+                    
                 elif choice == "七星彩":
-                    balls = []
+                    # 七星彩特例处理：前6位单数，第7位可能是两位数
+                    rest_text = " ".join([td.get_text(separator=" ") for td in tds[1:10]])
                     groups = re.findall(r'\d+', rest_text)
                     for g in groups:
-                        if len(g) >= 3: 
+                        if len(g) >= 3: # 连在一起的单数字，比如"123456"
                             for char in g: balls.append(int(char))
-                        else: balls.append(int(g))
-                else: balls = [int(n) for n in re.findall(r'\d+', rest_text)]
-                balls = [n for n in balls if 0 <= n <= 81]
-                if len(balls) >= d_cols_len:
-                    web_rows.append({"issue": issue_val, "balls": balls[:d_cols_len]})
-            if web_rows: break
+                        else: # 独立数字，可能是前6位的单数，也可能是第7位的两位数
+                            balls.append(int(g))
+                    balls = balls[:d_cols_len]
+                    
+                else:
+                    # 双色球、大乐透：保留原本极其稳定的双色球抓取逻辑
+                    rest_text = "   ".join([td.get_text(separator=" ") for td in tds[1:]])
+                    balls = [int(n) for n in re.findall(r'\d+', rest_text)]
+                    balls = [n for n in balls if 0 <= n <= 81][:d_cols_len]
+                # ==========================================================
+                
+                # 只有抓满所需的号码数量，才算有效数据
+                if len(balls) == d_cols_len:
+                    web_rows.append({"issue": issue_val, "balls": balls})
+                    
+            if web_rows: break # 如果第一个链接成功抓到，就不跑备用链接了
         except: continue
+        
     return web_rows
 
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
