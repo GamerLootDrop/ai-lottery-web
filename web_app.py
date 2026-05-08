@@ -122,7 +122,6 @@ def load_full_data(file_path, choice):
         return clean_df.sort_values('期号', ascending=False), '期号', new_names[1:], needs_zero, file_path
     except: return None, None, None, None, None
 
-# 🌟🌟🌟 【AI 算法引擎：已移除缓存，确保每次点击号码均有动态变化】 🌟🌟🌟
 def get_real_prediction(df_view, d_cols, choice):
     sets = []
     all_nums = []
@@ -159,7 +158,6 @@ def get_real_prediction(df_view, d_cols, choice):
     
     for algo in algos:
         r_res, b_res = [], []
-        # 增加随机扰动，防止结果完全静态
         if algo['type'] == 'hot':
             r_res = sorted(random.sample(hot_list_r[:count_r+2], count_r))
             if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
@@ -214,11 +212,10 @@ def get_real_prediction(df_view, d_cols, choice):
         sets.append({"name": algo['name'], "html": html, "text": text_copy, "is_vip": algo['vip']})
     return sets
 
-# --- 核心：联网数据防封缓存 (必须保留 TTL 确保 IP 安全) ---
+# --- 核心：抓取函数 (保持原本抓取逻辑，仅微调防止溢出) ---
 @st.cache_data(ttl=3600)
 def fetch_from_web(game_code, choice, d_cols_len):
     urls = [f"https://datachart.500.com/{game_code}/history/newinc/history.php?limit=50", f"https://datachart.500.com/{game_code}/history/inc/history.php?limit=50"]
-    # 升级了 User-Agent，伪装成真实浏览器，防封锁能力更强
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     web_rows = []
     
@@ -234,52 +231,42 @@ def fetch_from_web(game_code, choice, d_cols_len):
                 tds = tr.find_all('td')
                 if len(tds) < d_cols_len + 1: continue 
                 
-                # 提取期号
                 iss_str = re.sub(r'\D', '', tds[0].get_text(strip=True))
                 if len(iss_str) < 3: continue
+                # 限制期号长度，防止超大数字溢出
+                if len(iss_str) > 12: iss_str = iss_str[:10]
                 issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
                 
-                # ========== 🛡️ 老板专属：新版精准抗干扰抓取逻辑 ==========
                 balls = []
                 if choice == "快乐8":
-                    # 快乐8：从前面区域提取所有 1-80 范围内的数字，完美匹配 20 个球
                     text_block = " ".join([td.get_text(separator=" ") for td in tds[1:25]])
                     nums = [int(n) for n in re.findall(r'\b\d{1,2}\b', text_block)]
                     balls = [n for n in nums if 1 <= n <= 80][:d_cols_len]
-                    
                 elif choice in ["排列5", "排列3", "福彩3D"]:
-                    # 这些彩种号码经常连体（如12345）或含有杂乱空格，直接提取纯净数字
                     text_block = "".join([td.get_text(strip=True) for td in tds[1:8]])
                     digits = re.findall(r'\d', text_block)
                     balls = [int(d) for d in digits][:d_cols_len]
-                    
                 elif choice == "七星彩":
-                    # 七星彩特例处理：前6位单数，第7位可能是两位数
                     rest_text = " ".join([td.get_text(separator=" ") for td in tds[1:10]])
                     groups = re.findall(r'\d+', rest_text)
                     for g in groups:
-                        if len(g) >= 3: # 连在一起的单数字，比如"123456"
+                        if len(g) >= 3:
                             for char in g: balls.append(int(char))
-                        else: # 独立数字，可能是前6位的单数，也可能是第7位的两位数
+                        else:
                             balls.append(int(g))
                     balls = balls[:d_cols_len]
-                    
                 else:
-                    # 双色球、大乐透：保留原本极其稳定的双色球抓取逻辑
                     rest_text = "   ".join([td.get_text(separator=" ") for td in tds[1:]])
                     balls = [int(n) for n in re.findall(r'\d+', rest_text)]
                     balls = [n for n in balls if 0 <= n <= 81][:d_cols_len]
-                # ==========================================================
                 
-                # 只有抓满所需的号码数量，才算有效数据
                 if len(balls) == d_cols_len:
                     web_rows.append({"issue": issue_val, "balls": balls})
-                    
-            if web_rows: break # 如果第一个链接成功抓到，就不跑备用链接了
+            if web_rows: break 
         except: continue
-        
     return web_rows
 
+# --- 🎯 核心同步逻辑：手术级修复 OverflowError 🎯 ---
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
     status = st.empty()
     game_codes = {"双色球": "ssq", "大乐透": "dlt", "福彩3D": "sd", "排列3": "pls", "排列5": "plw", "七星彩": "qxc", "快乐8": "kl8"}
@@ -289,22 +276,49 @@ def sync_latest_data(df, q_col, d_cols, choice, file_path):
     web_data = fetch_from_web(game_code, choice, len(d_cols))
     
     if web_data:
-        web_rows = []
-        for item in web_data:
-            row = {q_col: item['issue']}
-            for i, col_name in enumerate(d_cols): row[col_name] = item['balls'][i]
-            web_rows.append(row)
-        
-        web_df = pd.DataFrame(web_rows)
-        df[q_col] = df[q_col].apply(lambda x: int(float(x)) if len(str(int(float(x))))!=5 else int("20"+str(int(float(x)))))
-        updated = pd.concat([web_df, df], ignore_index=True).drop_duplicates(subset=[q_col], keep='first').sort_values(q_col, ascending=False)
-        save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
-        updated.to_csv(save_path, index=False, encoding='utf-8-sig')
-        status.success(f"✅ 同步成功！已更新 {len(web_rows)} 期。")
-        st.cache_data.clear()
-        time.sleep(1)
-        st.rerun()
-    else: status.error("❌ 抓取失败，请稍后再试。")
+        try:
+            # 1. 预清洗抓到的数据，显式转换为 int 类型，防止对象污染
+            clean_web_rows = []
+            for item in web_data:
+                # 强制转换为标准 int，并防止期号由于异常过长
+                safe_issue = int(str(item['issue'])[:12])
+                new_row = {q_col: safe_issue}
+                for i, col_name in enumerate(d_cols):
+                    new_row[col_name] = int(item['balls'][i])
+                clean_web_rows.append(new_row)
+            
+            if not clean_web_rows:
+                status.warning("⚠️ 抓取到的数据格式异常，已终止同步。")
+                return
+
+            # 2. 强制指定 dtype 为 int64，杜绝 Python 3.14 下的类型推断溢出
+            web_df = pd.DataFrame(clean_web_rows).astype('int64')
+            
+            # 3. 对原有 df 进行数值化清洗，确保合并时不冲突
+            df[q_col] = pd.to_numeric(df[q_col], errors='coerce').fillna(0).astype('int64')
+            for c in d_cols:
+                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype('int64')
+
+            # 4. 合并、去重、排序
+            updated = pd.concat([web_df, df], ignore_index=True)
+            updated = updated.drop_duplicates(subset=[q_col], keep='first').sort_values(q_col, ascending=False)
+            
+            # 5. 限制文件大小，仅保留前 2000 期（彩票一般够用了）
+            updated = updated.head(2000)
+            
+            save_path = file_path if file_path.endswith('.csv') else file_path.replace('.xls', '_synced.csv')
+            updated.to_csv(save_path, index=False, encoding='utf-8-sig')
+            
+            status.success(f"✅ 同步成功！已更新 {len(clean_web_rows)} 期。")
+            st.cache_data.clear()
+            time.sleep(1)
+            st.rerun()
+        except Exception as e:
+            # 错误熔断：捕捉包括 OverflowError 在内的所有异常，不让页面崩掉
+            status.error(f"🚨 自动同步失败 (数据溢出/冲突)，建议手动更新本地文件。")
+            print(f"DEBUG: Sync Error - {str(e)}")
+    else:
+        status.error("❌ 抓取失败，请检查网络或源站。")
 
 # --- 侧边栏布局 ---
 LOTTERY_FILES = {"福彩3D": "3d", "双色球": "ssq", "大乐透": "dlt", "快乐8": "kl8", "排列3": "p3", "排列5": "p5", "七星彩": "7xc"}
@@ -378,7 +392,6 @@ if target:
 
         with t3:
             st.info(f"💡 提示：当前根据「{view_choice}」演算。点击右侧 📋 复制号码。")
-            
             st.markdown("##### 🎯 专属号码多维衍算 (支持复式拆解)")
             custom_input = st.text_input("🔮 输入您的【心水种子号】(用空格隔开)：", placeholder="例如输入：06 18，系统将推算 1码/3码/5码/6码 组合")
             
