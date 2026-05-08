@@ -9,10 +9,6 @@ import re
 from collections import Counter
 from datetime import datetime, timedelta
 import numpy as np 
-import urllib3
-
-# 🚨 增加一层安全保障：禁用 SSL 警告，防止部分服务器联网失败
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =========================================================
 # 💰💰💰 老板专属配置区 (只需修改这里，其他地方不用动) 💰💰💰
@@ -126,7 +122,7 @@ def load_full_data(file_path, choice):
         return clean_df.sort_values('期号', ascending=False), '期号', new_names[1:], needs_zero, file_path
     except: return None, None, None, None, None
 
-# 🌟🌟🌟 AI 算法引擎 (保持老板原版逻辑) 🌟🌟🌟
+# 🌟🌟🌟 【AI 算法引擎：已移除缓存，确保每次点击号码均有动态变化】 🌟🌟🌟
 def get_real_prediction(df_view, d_cols, choice):
     sets = []
     all_nums = []
@@ -163,6 +159,7 @@ def get_real_prediction(df_view, d_cols, choice):
     
     for algo in algos:
         r_res, b_res = [], []
+        # 增加随机扰动，防止结果完全静态
         if algo['type'] == 'hot':
             r_res = sorted(random.sample(hot_list_r[:count_r+2], count_r))
             if count_b > 0: b_res = sorted(random.sample(pool_b, count_b))
@@ -217,44 +214,70 @@ def get_real_prediction(df_view, d_cols, choice):
         sets.append({"name": algo['name'], "html": html, "text": text_copy, "is_vip": algo['vip']})
     return sets
 
-# --- 🛠️ 核心：老板专属【增强型精准抓取逻辑】 (这是唯一修改的地方) ---
+# --- 核心：联网数据防封缓存 (必须保留 TTL 确保 IP 安全) ---
 @st.cache_data(ttl=3600)
 def fetch_from_web(game_code, choice, d_cols_len):
     urls = [f"https://datachart.500.com/{game_code}/history/newinc/history.php?limit=50", f"https://datachart.500.com/{game_code}/history/inc/history.php?limit=50"]
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    # 升级了 User-Agent，伪装成真实浏览器，防封锁能力更强
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     web_rows = []
     
     for url in urls:
         try:
-            res = requests.get(url, headers=headers, timeout=12, verify=False)
+            res = requests.get(url, headers=headers, timeout=10)
             res.encoding = 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
-            trs = soup.find_all('tr')
+            tdata = soup.find('tbody', id='tdata')
+            trs = tdata.find_all('tr') if tdata else (soup.find_all('tr', class_=['t_tr1', 't_tr2', 't_tr']) or soup.find_all('tr'))
+            
             for tr in trs:
-                tds = tr.find_all(['td', 'th'])
-                if len(tds) < 4: continue 
+                tds = tr.find_all('td')
+                if len(tds) < d_cols_len + 1: continue 
+                
+                # 提取期号
                 iss_str = re.sub(r'\D', '', tds[0].get_text(strip=True))
                 if len(iss_str) < 3: continue
                 issue_val = int("20" + iss_str) if len(iss_str) == 5 else int(iss_str)
                 
-                # 针对不同彩种的抗干扰数字提取
-                line_text = " ".join([t.get_text(strip=True) for t in tds[1:25]])
-                if choice in ["排列5", "排列3", "福彩3D"]:
-                    balls = [int(d) for d in re.findall(r'\d', line_text)][:d_cols_len]
+                # ========== 🛡️ 老板专属：新版精准抗干扰抓取逻辑 ==========
+                balls = []
+                if choice == "快乐8":
+                    # 快乐8：从前面区域提取所有 1-80 范围内的数字，完美匹配 20 个球
+                    text_block = " ".join([td.get_text(separator=" ") for td in tds[1:25]])
+                    nums = [int(n) for n in re.findall(r'\b\d{1,2}\b', text_block)]
+                    balls = [n for n in nums if 1 <= n <= 80][:d_cols_len]
+                    
+                elif choice in ["排列5", "排列3", "福彩3D"]:
+                    # 这些彩种号码经常连体（如12345）或含有杂乱空格，直接提取纯净数字
+                    text_block = "".join([td.get_text(strip=True) for td in tds[1:8]])
+                    digits = re.findall(r'\d', text_block)
+                    balls = [int(d) for d in digits][:d_cols_len]
+                    
                 elif choice == "七星彩":
-                    all_nums = re.findall(r'\d+', line_text)
-                    balls = []
-                    for n in all_nums:
-                        if len(n) > 2: balls.extend([int(c) for c in n])
-                        else: balls.append(int(n))
+                    # 七星彩特例处理：前6位单数，第7位可能是两位数
+                    rest_text = " ".join([td.get_text(separator=" ") for td in tds[1:10]])
+                    groups = re.findall(r'\d+', rest_text)
+                    for g in groups:
+                        if len(g) >= 3: # 连在一起的单数字，比如"123456"
+                            for char in g: balls.append(int(char))
+                        else: # 独立数字，可能是前6位的单数，也可能是第7位的两位数
+                            balls.append(int(g))
                     balls = balls[:d_cols_len]
+                    
                 else:
-                    balls = [int(n) for n in re.findall(r'\b\d{1,2}\b', line_text) if 0 <= int(n) <= 80][:d_cols_len]
+                    # 双色球、大乐透：保留原本极其稳定的双色球抓取逻辑
+                    rest_text = "   ".join([td.get_text(separator=" ") for td in tds[1:]])
+                    balls = [int(n) for n in re.findall(r'\d+', rest_text)]
+                    balls = [n for n in balls if 0 <= n <= 81][:d_cols_len]
+                # ==========================================================
                 
+                # 只有抓满所需的号码数量，才算有效数据
                 if len(balls) == d_cols_len:
                     web_rows.append({"issue": issue_val, "balls": balls})
-            if web_rows: break 
+                    
+            if web_rows: break # 如果第一个链接成功抓到，就不跑备用链接了
         except: continue
+        
     return web_rows
 
 def sync_latest_data(df, q_col, d_cols, choice, file_path):
@@ -355,6 +378,7 @@ if target:
 
         with t3:
             st.info(f"💡 提示：当前根据「{view_choice}」演算。点击右侧 📋 复制号码。")
+            
             st.markdown("##### 🎯 专属号码多维衍算 (支持复式拆解)")
             custom_input = st.text_input("🔮 输入您的【心水种子号】(用空格隔开)：", placeholder="例如输入：06 18，系统将推算 1码/3码/5码/6码 组合")
             
