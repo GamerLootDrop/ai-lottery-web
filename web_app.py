@@ -729,7 +729,7 @@ if target:
                                 st.code(s['text'].replace('推荐号码: ', ''), language="text")
 
         with t7:
-            # --- 🎯 专家级全彩种缩水终端 (V5.1 最终加固版) ---
+            # --- 🎯 专家级全彩种缩水终端 (V5.2 逻辑加固防灾版) ---
             st.header("🎯 专家级全彩种缩水终端")
             
             if not st.session_state.get('vip_unlocked', False):
@@ -801,43 +801,54 @@ if target:
                             return c[0] == t[0] and c[1] == t[1] and c[2] == t[2]
                         except: return True
 
+                    # 基础合规性校验
                     r_ok = (len(p_rd) + len(p_rt)) >= cfg["r_need"]
                     b_ok = (len(p_bd) + len(p_bt) >= cfg["b_need"]) if cfg["b_max"] > 0 else True
 
                     if r_ok and b_ok:
                         with st.spinner("正在调取最新期号进行马尔科夫概率演算..."):
+                            # 1. 红球生成逻辑加固
                             tuo_n = cfg["r_need"] - len(p_rd)
                             valid_reds = []
                             checked_count = 0
                             
-                            # 迭代器模式防止大数据崩溃
-                            for rt in itertools.combinations(p_rt, tuo_n):
-                                checked_count += 1
-                                if checked_count > 150000:
-                                    st.error("❌ 计算量过大！请设置1-2个胆码以保护系统稳定。")
-                                    st.stop()
-                                
-                                current_red = sorted(list(p_rd) + list(rt))
-                                # 专家级缩水过滤链
-                                if u012 and not check_012_logic(current_red, p_012_val): continue
-                                if ukill and any(current_red[i] == current_red[i-1]+1 and current_red[i+1] == current_red[i]+1 for i in range(1, len(current_red)-1)): continue
-                                if utail and len(set(x % 10 for x in current_red)) != len(current_red): continue
-                                
-                                valid_reds.append(current_red)
-                                if len(valid_reds) >= 500: break
+                            if tuo_n < 0: # 胆码选多了，自动截取
+                                valid_reds = [sorted(p_rd[:cfg["r_need"]])]
+                            elif tuo_n == 0: # 胆码正好
+                                valid_reds = [sorted(p_rd)]
+                            else: # 正常胆拖计算
+                                for rt in itertools.combinations(p_rt, tuo_n):
+                                    checked_count += 1
+                                    if checked_count > 150000:
+                                        st.error("❌ 计算量过大！请设置1-2个胆码以保护系统稳定。")
+                                        st.stop()
+                                    
+                                    current_red = sorted(list(p_rd) + list(rt))
+                                    if u012 and not check_012_logic(current_red, p_012_val): continue
+                                    if ukill and any(current_red[i] == current_red[i-1]+1 and current_red[i+1] == current_red[i]+1 for i in range(1, len(current_red)-1)): continue
+                                    if utail and len(set(x % 10 for x in current_red)) != len(current_red): continue
+                                    
+                                    valid_reds.append(current_red)
+                                    if len(valid_reds) >= 500: break
 
-                            # 蓝球生成
+                            # 2. 蓝球生成逻辑【终极加固】
                             if cfg["b_max"] > 0:
                                 b_tuo_n = cfg["b_need"] - len(p_bd)
-                                valid_blues = [sorted(list(p_bd) + list(bt)) for bt in itertools.combinations(p_bt, b_tuo_n)]
+                                if b_tuo_n <= 0: # 蓝球胆码选够了
+                                    valid_blues = [sorted(p_bd[:cfg["b_need"]])]
+                                elif len(p_bt) < b_tuo_n: # 蓝球拖码不够，拼凑显示
+                                    valid_blues = [sorted(list(p_bd) + list(p_bt))]
+                                else: # 正常蓝球计算
+                                    valid_blues = [sorted(list(p_bd) + list(bt)) for bt in itertools.combinations(p_bt, b_tuo_n)]
                             else:
                                 valid_blues = [[]]
 
-                            # 结果显示
-                            if not valid_reds:
-                                st.warning(f"🧐 演算完成。但在【{p_012_val}】及现有条件下未找到组合。")
+                            # 3. 结果显示
+                            if not valid_reds or not valid_blues:
+                                st.warning(f"🧐 演算完成。但在现有条件下未找到组合。建议减少过滤项或增加候选球。")
                             else:
-                                st.success(f"🎉 演算成功！根据最新数据筛选出 {len(valid_reds)*len(valid_blues)} 注极品单。")
+                                total_count = len(valid_reds) * len(valid_blues)
+                                st.success(f"🎉 演算成功！根据最新数据筛选出 {total_count} 注极品单。")
                                 display_cnt = 0
                                 for r in valid_reds:
                                     for b in valid_blues:
