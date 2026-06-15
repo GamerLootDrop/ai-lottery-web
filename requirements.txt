@@ -1,9 +1,8 @@
 streamlit
 pandas
-plotly
 requests
 beautifulsoup4
-xlrd
 openpyxl
+xlrd
 gspread
 google-auth
