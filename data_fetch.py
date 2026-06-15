@@ -8,10 +8,41 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
-from lottery_rules import LOTTERY_FILES, WEB_GAME_CODES
+from lottery_rules import LOTTERY_FILES, WEB_GAME_CODES, get_lottery_rules
 
 FETCH_LOG_FILE = "fetch_log.csv"
 FETCH_COOLDOWN_SECONDS = 1800
+
+
+def is_valid_lottery_row(choice, issue, balls):
+    try:
+        issue_val = int(issue)
+    except Exception:
+        return False
+    if issue_val < 1000000 or issue_val > 9999999:
+        return False
+
+    pool_r, count_r, pool_b, count_b = get_lottery_rules(choice)
+    if len(balls) != count_r + count_b:
+        return False
+
+    try:
+        nums = [int(n) for n in balls]
+    except Exception:
+        return False
+
+    front = nums[:count_r]
+    back = nums[count_r:]
+    if any(n not in pool_r for n in front):
+        return False
+    if count_b > 0 and any(n not in pool_b for n in back):
+        return False
+    if choice in ["双色球", "大乐透", "快乐8"]:
+        if len(set(front)) != len(front):
+            return False
+        if count_b > 1 and len(set(back)) != len(back):
+            return False
+    return True
 
 
 def find_lottery_file(choice, base_dir="."):
@@ -104,6 +135,11 @@ def load_full_data(file_path, choice):
         draw_df.columns = ["期号"] + draw_names
         for c in ["期号"] + draw_names:
             draw_df[c] = pd.to_numeric(draw_df[c], errors="coerce").fillna(0).astype(int)
+        valid_mask = draw_df.apply(
+            lambda row: is_valid_lottery_row(choice, row["期号"], [row[col] for col in draw_names]),
+            axis=1,
+        )
+        draw_df = draw_df[valid_mask].copy()
 
         if date_col:
             draw_df["日期"] = raw_df[date_col].astype(str)
@@ -174,7 +210,7 @@ def fetch_from_web(game_code, choice, d_cols_len, limit=50):
 
                 balls = [n for n in balls if 0 <= n <= 81][:d_cols_len]
 
-                if len(balls) == d_cols_len:
+                if len(balls) == d_cols_len and is_valid_lottery_row(choice, issue_val, balls):
                     web_rows.append({"issue": issue_val, "date": date_str, "balls": balls})
             if web_rows:
                 break
@@ -213,7 +249,7 @@ def fetch_from_cwl(choice, d_cols_len, limit=50):
             blue_text = str(item.get("blue") or item.get("blueCode") or item.get("backWinningNum") or "")
             balls = [int(n) for n in re.findall(r"\d+", red_text + " " + blue_text)]
             balls = [n for n in balls if 0 <= n <= 81][:d_cols_len]
-            if len(balls) == d_cols_len:
+            if len(balls) == d_cols_len and is_valid_lottery_row(choice, issue_val, balls):
                 web_rows.append({"issue": issue_val, "date": date_str[:10], "balls": balls})
         return web_rows
     except Exception:
@@ -241,6 +277,8 @@ def build_synced_dataframe(df, q_col, d_cols, choice):
 
     clean_web_rows = []
     for item in web_data:
+        if not is_valid_lottery_row(choice, item["issue"], item["balls"]):
+            continue
         row_dict = {"期号": item["issue"]}
         if item.get("date"):
             row_dict["日期"] = item["date"]
@@ -250,6 +288,15 @@ def build_synced_dataframe(df, q_col, d_cols, choice):
         clean_web_rows.append(row_dict)
 
     web_df = pd.DataFrame(clean_web_rows)
+    if web_df.empty:
+        cleaned_existing = df.copy()
+        if d_cols:
+            valid_mask = cleaned_existing.apply(
+                lambda row: is_valid_lottery_row(choice, row[q_col], [row[col] for col in d_cols if col in row]),
+                axis=1,
+            )
+            cleaned_existing = cleaned_existing[valid_mask].copy()
+        return cleaned_existing, "已剔除异常数据；未抓取到新的合规开奖数据。"
     for col in ["期号"] + d_cols:
         if col in web_df.columns:
             web_df[col] = pd.to_numeric(web_df[col], errors="coerce").fillna(0).astype("int64")
@@ -259,6 +306,11 @@ def build_synced_dataframe(df, q_col, d_cols, choice):
         .sort_values(q_col, ascending=False)
         .head(2000)
     )
+    valid_mask = updated.apply(
+        lambda row: is_valid_lottery_row(choice, row[q_col], [row[col] for col in d_cols if col in row]),
+        axis=1,
+    )
+    updated = updated[valid_mask].copy()
     if "日期" in updated.columns:
         updated["日期_解析"] = pd.to_datetime(updated["日期"], errors="coerce")
         updated["星期"] = updated["日期_解析"].dt.dayofweek
